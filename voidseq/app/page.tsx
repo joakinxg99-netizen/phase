@@ -635,6 +635,16 @@ euclid percA 5 16 2
 euclid texture 2 16 9
 melodark`);
   const [liveStatus, setLiveStatus] = useState("ready");
+  const [generator, setGenerator] = useState({
+    mood: "melodark" as "melodark" | "hypnotic" | "acid" | "industrial" | "melodic",
+    density: 62,
+    complexity: 58,
+    darkness: 70,
+    acid: 24,
+    bassMotion: 54,
+    synthMotion: 58,
+    groove: 22,
+  });
 
   const synths       = useRef<any>(null);
   const sequenceRef  = useRef<Tone.Sequence | null>(null);
@@ -3053,7 +3063,7 @@ melodark`);
           const len = Math.max(1, Math.min(16, Number.isFinite(length) ? length : 16));
           const euclid = euclideanPattern(len, hits, Number.isFinite(rotate) ? rotate : 0);
           const euclidSteps: Step[] = Array.from({ length: steps }, (_, i) =>
-  makeStep(Boolean(euclid[i % len]), track, i)
+  normalizeStep(makeStep(Boolean(euclid[i % len]), track, i), track, i)
 );
 
 nextPattern[row] = euclidSteps;
@@ -3103,6 +3113,142 @@ nextPattern[row] = euclidSteps;
     const next = templates[Math.floor(Math.random() * templates.length)] || templates[0];
     setLiveCode(next);
     setLiveStatus("random Strudel-ish script loaded");
+  }
+
+
+  function setGeneratorValue<K extends keyof typeof generator>(key: K, value: (typeof generator)[K]) {
+    setGenerator((prev) => ({ ...prev, [key]: value }));
+  }
+
+  type GeneratorNumberKey = Exclude<keyof typeof generator, "mood">;
+  function setGeneratorNumberValue(key: GeneratorNumberKey, value: number) {
+    setGenerator((prev) => ({ ...prev, [key]: Math.max(0, Math.min(100, Math.round(value))) }));
+  }
+
+  function pick<T>(items: readonly T[]): T {
+    return items[Math.floor(Math.random() * items.length)] || items[0];
+  }
+
+  function boolPatternFromEuclid(length: number, hits: number, rotate = 0) {
+    const base = euclideanPattern(length, hits, rotate);
+    return Array.from({ length: steps }, (_, i) => Boolean(base[i % Math.max(1, length)]));
+  }
+
+  function applyBoolLane(nextPattern: Step[][], track: TrackId, hits: boolean[], mutateNotes = false) {
+    const row = tracks.indexOf(track);
+    if (row < 0) return;
+    nextPattern[row] = Array.from({ length: steps }, (_, i) => {
+      const step = makeStep(Boolean(hits[i]), track, i);
+      if (mutateNotes && (track === "BASS" || track === "SYNTH")) {
+        step.note = track === "BASS" ? pick(BASS_RANDOM_NOTES) : pick(SYNTH_RANDOM_NOTES);
+      }
+      return normalizeStep(step, track, i);
+    });
+  }
+
+  function generateVisualPattern(mode: "generate" | "mutate" | "minimal" | "dense" | "dark" | "acid") {
+    const mood = mode === "acid" ? "acid" : mode === "dark" ? "industrial" : generator.mood;
+    const density = mode === "minimal" ? Math.max(22, generator.density - 28) : mode === "dense" ? Math.min(95, generator.density + 24) : generator.density;
+    const complexity = mode === "minimal" ? Math.max(18, generator.complexity - 30) : mode === "dense" ? Math.min(96, generator.complexity + 22) : generator.complexity;
+    const darkness = mode === "dark" ? 92 : generator.darkness;
+    const acidAmount = mode === "acid" ? 92 : generator.acid;
+    const bassMotion = mode === "minimal" ? Math.max(18, generator.bassMotion - 20) : generator.bassMotion;
+    const synthMotion = mode === "minimal" ? Math.max(14, generator.synthMotion - 24) : generator.synthMotion;
+
+    const nextPattern: Step[][] = tracks.map((track) => Array.from({ length: steps }, (_, i) => makeStep(false, track, i)));
+    const nextLengths: Record<TrackId, number> = { KICK: 16, HAT: 16, "PERC A": 16, "PERC B": 16, TEXTURE: 16, BASS: 16, SYNTH: 16 };
+    const nextEuclidean = normalizeEuclidean(DEFAULT_EUCLIDEAN);
+
+    const kick = Array.from({ length: steps }, (_, i) => i % 4 === 0);
+    if (density > 78 && Math.random() > 0.38) kick[14] = true;
+    if (complexity > 82 && Math.random() > 0.5) kick[7] = true;
+    applyBoolLane(nextPattern, "KICK", kick);
+
+    const hatHits = Math.max(4, Math.min(15, Math.round(mapRange(density, 0, 100, 5, 14))));
+    applyBoolLane(nextPattern, "HAT", boolPatternFromEuclid(16, hatHits, generator.groove > 35 ? 1 : 0));
+
+    const percAHits = Math.max(1, Math.min(11, Math.round(mapRange(complexity, 0, 100, 2, 10))));
+    const percBHits = Math.max(0, Math.min(8, Math.round(mapRange(complexity + density * 0.35, 0, 135, 1, 8))));
+    applyBoolLane(nextPattern, "PERC A", boolPatternFromEuclid(16, percAHits, Math.round(mapRange(generator.groove, 0, 100, 0, 5))));
+    applyBoolLane(nextPattern, "PERC B", boolPatternFromEuclid(16, percBHits, Math.round(mapRange(complexity, 0, 100, 3, 11))));
+
+    const textureHits = Math.max(0, Math.min(5, Math.round(mapRange(darkness + synthMotion * 0.4, 0, 140, 1, 5))));
+    applyBoolLane(nextPattern, "TEXTURE", boolPatternFromEuclid(16, textureHits, Math.round(mapRange(darkness, 0, 100, 4, 13))));
+
+    const bassPool = mood === "acid" ? ["D1", "D1", "F1", "G1", "A1", "C2"] : mood === "melodic" ? ["D1", "F1", "A1", "C2", "G1"] : ["D1", "F1", "G1", "A1", "A#1", "C2"];
+    const bassRow = tracks.indexOf("BASS");
+    nextPattern[bassRow] = Array.from({ length: steps }, (_, i) => {
+      const strong = i % 4 === 0;
+      const extra = Math.random() < mapRange(bassMotion, 0, 100, 0.05, 0.42) && i % 2 === 0;
+      const step = makeStep(strong || extra, "BASS", i);
+      step.note = strong ? bassPool[(i / 4) % bassPool.length] : pick(bassPool);
+      step.velocity = strong ? 100 : pick([70, 100, 70]);
+      step.gate = acidAmount > 65 ? pick(["32n", "16n", "16n"]) : pick(["16n", "8n"]);
+      return normalizeStep(step, "BASS", i);
+    });
+
+    const chordPalette: ChordMode[] = mood === "acid" ? ["SINGLE", "OCTAVE", "POWER"] : mood === "industrial" ? ["POWER", "SUS2", "OCTAVE", "MINOR"] : mood === "melodic" ? ["MIN7", "SUS2", "SUS4", "MINOR"] : ["MIN7", "SUS2", "POWER", "SUS4"];
+    const synthPool = ["D3", "F3", "A3", "C4", "G3", "A#3"];
+    const synthRow = tracks.indexOf("SYNTH");
+    nextPattern[synthRow] = Array.from({ length: steps }, (_, i) => {
+      const pulse = i % 4 === 0 || (synthMotion > 72 && i % 4 === 2) || (Math.random() < mapRange(synthMotion, 0, 100, 0.02, 0.24) && i % 2 === 0);
+      const step = makeStep(pulse, "SYNTH", i);
+      step.note = synthPool[(Math.floor(i / 4) + (mode === "mutate" ? Math.floor(Math.random() * 3) : 0)) % synthPool.length];
+      step.chord = pick(chordPalette);
+      step.velocity = pick([70, 70, 100]);
+      step.gate = synthMotion > 62 ? pick(["16n", "8n"]) : "8n";
+      return normalizeStep(step, "SYNTH", i);
+    });
+
+    setPattern(nextPattern);
+    setTrackLengths(nextLengths);
+    setEuclidean(nextEuclidean);
+    setKnobs((prev) => ({
+      ...prev,
+      density,
+      chaos: Math.max(8, Math.min(88, Math.round(complexity * 0.64 + acidAmount * 0.2))),
+      groove: Math.max(0, Math.min(100, generator.groove)),
+      phase: Math.max(20, Math.min(92, Math.round(50 + synthMotion * 0.36 - darkness * 0.12))),
+    }));
+    setBassPerformance((prev) => ({
+      ...prev,
+      cutoff: Math.max(32, Math.min(92, Math.round(42 + bassMotion * 0.32 + acidAmount * 0.22))),
+      drive: Math.max(10, Math.min(92, Math.round(22 + darkness * 0.22 + acidAmount * 0.42))),
+      punch: Math.max(48, Math.min(95, Math.round(60 + density * 0.24))),
+      decay: Math.max(18, Math.min(78, Math.round(54 - acidAmount * 0.22 + bassMotion * 0.08))),
+      glide: Math.max(0, Math.min(68, Math.round(acidAmount * 0.42 + bassMotion * 0.12))),
+    }));
+    setSynthMod((prev) => ({
+      ...prev,
+      filterEnv: Math.max(18, Math.min(95, Math.round(28 + synthMotion * 0.42 + acidAmount * 0.24))),
+      fmAmount: Math.max(8, Math.min(95, Math.round(16 + acidAmount * 0.62 + darkness * 0.12))),
+      detune: Math.max(0, Math.min(60, Math.round(4 + darkness * 0.08 + synthMotion * 0.08))),
+      delaySend: Math.max(0, Math.min(70, Math.round(8 + synthMotion * 0.36))),
+      reverbSend: Math.max(6, Math.min(82, Math.round(12 + darkness * 0.28 + synthMotion * 0.18))),
+      lfoDepth: Math.max(8, Math.min(88, Math.round(18 + synthMotion * 0.48))),
+    }));
+    setDrumDesigner((prev) => ({
+      ...prev,
+      kick: { ...prev.kick, drive: Math.max(10, Math.min(72, Math.round(18 + darkness * 0.20))), click: Math.max(45, Math.min(90, Math.round(54 + density * 0.25))) },
+      hat: { ...prev.hat, brightness: Math.max(38, Math.min(96, Math.round(48 + density * 0.34))), decay: Math.max(24, Math.min(70, Math.round(60 - density * 0.18))) },
+      perc: { ...prev.perc, snap: Math.max(22, Math.min(95, Math.round(42 + complexity * 0.42))), space: Math.max(0, Math.min(70, Math.round(darkness * 0.22))) },
+      fx: { ...prev.fx, size: Math.max(12, Math.min(92, Math.round(20 + darkness * 0.48))), feedback: Math.max(6, Math.min(82, Math.round(16 + synthMotion * 0.45))) },
+    }));
+    setLiveStatus(`${mode.toUpperCase()} · ${mood} · density ${density} · complexity ${complexity}`);
+  }
+
+  function randomizeGeneratorControls() {
+    setGenerator({
+      mood: pick(["melodark", "hypnotic", "acid", "industrial", "melodic"] as const),
+      density: Math.round(mapRange(Math.random(), 0, 1, 42, 82)),
+      complexity: Math.round(mapRange(Math.random(), 0, 1, 28, 88)),
+      darkness: Math.round(mapRange(Math.random(), 0, 1, 45, 94)),
+      acid: Math.round(mapRange(Math.random(), 0, 1, 5, 78)),
+      bassMotion: Math.round(mapRange(Math.random(), 0, 1, 22, 88)),
+      synthMotion: Math.round(mapRange(Math.random(), 0, 1, 20, 92)),
+      groove: Math.round(mapRange(Math.random(), 0, 1, 0, 46)),
+    });
+    setLiveStatus("generator controls randomized");
   }
 
   const anySoloed = tracks.some((id) => solos[id]);
@@ -5572,10 +5718,94 @@ nextPattern[row] = euclidSteps;
           padding: 1px 4px !important;
           border-radius: 4px !important;
         }
+
+        .ph-gen-layout {
+          display: grid !important;
+          grid-template-columns: minmax(0, 1fr) 260px !important;
+          gap: 10px !important;
+          padding: 10px !important;
+        }
+        .ph-gen-left,
+        .ph-gen-right {
+          border-radius: 10px !important;
+          border: 1px solid rgba(255,255,255,0.07) !important;
+          background: rgba(255,255,255,0.025) !important;
+          padding: 10px !important;
+          min-width: 0 !important;
+        }
+        .ph-gen-moods {
+          display: grid !important;
+          grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+          gap: 6px !important;
+          margin-bottom: 10px !important;
+        }
+        .ph-gen-mood,
+        .ph-gen-perform button {
+          height: 30px !important;
+          border-radius: 8px !important;
+          border: 1px solid rgba(255,255,255,0.09) !important;
+          background: rgba(255,255,255,0.045) !important;
+          color: #dfe6f3 !important;
+          font-size: 9px !important;
+          font-weight: 800 !important;
+          letter-spacing: .12em !important;
+          text-transform: uppercase !important;
+          cursor: pointer !important;
+          font-family: 'DM Mono', monospace !important;
+        }
+        .ph-gen-mood.active {
+          color: #120f1e !important;
+          background: linear-gradient(180deg, #efe36b, #aab2c0) !important;
+          border-color: rgba(239,227,107,0.82) !important;
+          box-shadow: 0 0 18px rgba(239,227,107,0.20) !important;
+        }
+        .ph-gen-sliders {
+          display: grid !important;
+          grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+          gap: 8px !important;
+        }
+        .ph-gen-slider {
+          display: grid !important;
+          grid-template-columns: 116px 1fr 32px !important;
+          align-items: center !important;
+          gap: 8px !important;
+          min-width: 0 !important;
+          border-radius: 8px !important;
+          padding: 7px 8px !important;
+          background: rgba(0,0,0,0.18) !important;
+          border: 1px solid rgba(255,255,255,0.045) !important;
+        }
+        .ph-gen-slider span {
+          color: #9da8ba !important;
+          font-size: 9px !important;
+          letter-spacing: .08em !important;
+          text-transform: uppercase !important;
+          white-space: nowrap !important;
+        }
+        .ph-gen-slider input { width: 100% !important; accent-color: #a882ff !important; }
+        .ph-gen-slider b {
+          color: #efe36b !important;
+          font-size: 10px !important;
+          text-align: right !important;
+        }
+        .ph-gen-perform {
+          display: grid !important;
+          grid-template-columns: 1fr !important;
+          gap: 6px !important;
+          margin: 9px 0 !important;
+        }
+        .ph-gen-description {
+          color: #8d98aa !important;
+          font-size: 10px !important;
+          line-height: 1.55 !important;
+        }
         @media (max-width: 980px) {
           .ph-live-body { grid-template-columns: 1fr !important; }
           .ph-live-head { align-items: flex-start !important; flex-direction: column !important; }
           .ph-live-actions { justify-content: flex-start !important; }
+          .ph-gen-layout { grid-template-columns: 1fr !important; }
+          .ph-gen-sliders { grid-template-columns: 1fr !important; }
+          .ph-gen-moods { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
         }
 
       `}</style>
@@ -5631,42 +5861,69 @@ nextPattern[row] = euclidSteps;
           </div>
         </header>
 
-        {/* ── PHASE LIVE CODE ── */}
-        <section className="ph-card ph-live-card">
+        {/* ── PHASE GENERATOR ── */}
+        <section className="ph-card ph-live-card ph-generator-card">
           <div className="ph-live-head">
             <div className="ph-live-title">
-              <strong>PHASE LIVE CODE</strong>
-              <span>tracker syntax · code to grid · techno generator</span>
+              <strong>PHASE GENERATOR</strong>
+              <span>visual generative techno engine · no coding</span>
             </div>
             <div className="ph-live-actions">
-              <button className="ph-live-run" onClick={applyLiveCode}>RUN</button>
-              <button className="ph-live-btn" onClick={randomLiveCode}>RANDOM</button>
-              <button className="ph-live-btn" onClick={clearLiveCode}>CLEAR</button>
+              <button className="ph-live-run" onClick={() => generateVisualPattern("generate")}>GENERATE</button>
+              <button className="ph-live-btn" onClick={() => generateVisualPattern("mutate")}>MUTATE</button>
+              <button className="ph-live-btn" onClick={randomizeGeneratorControls}>RANDOMIZE</button>
             </div>
           </div>
-          <div className="ph-live-body">
-            <textarea
-              className="ph-live-code"
-              spellCheck={false}
-              value={liveCode}
-              onChange={(e) => setLiveCode(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  applyLiveCode();
-                }
-              }}
-            />
-            <div className="ph-live-side">
+
+          <div className="ph-gen-layout">
+            <div className="ph-gen-left">
+              <div className="ph-gen-moods">
+                {(["melodark", "hypnotic", "acid", "industrial", "melodic"] as const).map((mood) => (
+                  <button
+                    key={mood}
+                    className={`ph-gen-mood${generator.mood === mood ? " active" : ""}`}
+                    onClick={() => setGeneratorValue("mood", mood)}
+                  >
+                    {mood}
+                  </button>
+                ))}
+              </div>
+
+              <div className="ph-gen-sliders">
+                {([
+                  ["density", "Rhythm density"],
+                  ["complexity", "Perc complexity"],
+                  ["darkness", "Dark pressure"],
+                  ["acid", "Acid bite"],
+                  ["bassMotion", "Bass movement"],
+                  ["synthMotion", "Synth motion"],
+                  ["groove", "Groove / swing"],
+                ] as Array<[GeneratorNumberKey, string]>).map(([key, label]) => (
+                  <label key={String(key)} className="ph-gen-slider">
+                    <span>{label}</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={Number(generator[key])}
+                      onChange={(e) => setGeneratorNumberValue(key, Number(e.target.value))}
+                    />
+                    <b>{generator[key]}</b>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="ph-gen-right">
               <div className="ph-live-status">{liveStatus}</div>
-              <div className="ph-live-help">
-                <div><code>kick x...x...</code></div>
-                <div><code>hat .x.x.x</code></div>
-                <div><code>bass D1 . F1 .</code></div>
-                <div><code>synth D3:MIN7 . F3:SUS2</code></div>
-                <div><code>euclid percA 5 16 2</code></div>
-                <div><code>bpm 138</code> · <code>swing 18</code> · <code>acid</code></div>
-                <div style={{ marginTop: 8, color: "#697386" }}>Shortcut: Cmd/Ctrl + Enter = RUN</div>
+              <div className="ph-gen-perform">
+                <button onClick={() => generateVisualPattern("minimal")}>MORE MINIMAL</button>
+                <button onClick={() => generateVisualPattern("dense")}>MORE DENSE</button>
+                <button onClick={() => generateVisualPattern("dark")}>DARKER</button>
+                <button onClick={() => generateVisualPattern("acid")}>MORE ACID</button>
+              </div>
+              <div className="ph-gen-description">
+                This creates Strudel-like hypnotic patterns with visual controls: Euclidean hats/percs, dark bass movement, chord pulses, acid color and automatic synth/drum shaping.
               </div>
             </div>
           </div>
