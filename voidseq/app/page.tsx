@@ -566,6 +566,241 @@ function generatePattern(density = 58): Step[][] {
   );
 }
 
+const LIVE_CODE_DEFAULT = `// PHASE LIVE CODE
+// x = on · . or ~ = off · notes write directly to BASS/SYNTH
+bpm 138
+swing 42
+kick x...x...x...x...
+hat .x.x.x.x.x.x.x.x
+percA ..x...x...x...x.
+percB ....x.....x...x.
+texture .......x.......x
+bass D1 ~ D1 ~ F1 ~ A1 ~ C2 ~ A1 ~ G1 ~
+synth D3:min7 ~ F3:sus2 ~ A3:min ~ C4:oct ~`;
+
+const LIVE_CODE_RANDOMS = [
+  `bpm 138
+swing 46
+chaos 22
+kick x...x...x...x...
+hat .x.x.x.x.x.x.x.x
+percA ..x...x...x...x.
+percB .....x...x....x.
+texture ........x.......
+bass D1 ~ D1 ~ F1 ~ A1 ~ C2 ~ A1 ~ G1 ~
+synth D3:min7 ~ ~ ~ F3:sus2 ~ ~ ~ A3:min ~ ~ ~ C4:oct ~ ~ ~`,
+  `bpm 142
+swing 54
+chaos 34
+kick x...x...x...x...
+hat x.xx.xx.x.xx.xx.
+percA ..x.x...x...x...
+percB ....x.....x.x...
+texture .......x.......x
+bass D1 D1 ~ F1 A1 ~ C2 ~ A1 ~ G1 ~ F1 ~ A1 ~
+synth A3:min ~ C4:sus4 ~ G3:power ~ F3:min7 ~`,
+  `bpm 136
+swing 38
+phase 72
+kick x...x...x...x...
+hat .x..xx.x.x..xx.x
+percA euclid 5 16 2
+percB euclid 3 16 5
+texture ....x.......x...
+bass D1 ~ A1 ~ C2 ~ A1 ~ G1 ~ F1 ~ D1 ~ A1 ~
+synth F3:sus2 ~ ~ A3:min ~ ~ C4:min7 ~ ~ G3:power ~ ~`
+];
+
+function liveAliasToTrack(alias: string): TrackId | null {
+  const key = alias.trim().toLowerCase().replace(/[\s_-]/g, "");
+  if (["k", "kick", "bd"].includes(key)) return "KICK";
+  if (["h", "hat", "hh", "hihat", "hiHat".toLowerCase()].includes(key)) return "HAT";
+  if (["pa", "perca", "perc", "percussion", "snare", "snr", "clap"].includes(key)) return "PERC A";
+  if (["pb", "percb", "perc2", "rim", "rimshot"].includes(key)) return "PERC B";
+  if (["fx", "texture", "tex", "noise", "atmos"].includes(key)) return "TEXTURE";
+  if (["b", "bass", "sub"].includes(key)) return "BASS";
+  if (["s", "synth", "lead", "pad", "chord", "chords"].includes(key)) return "SYNTH";
+  return null;
+}
+
+function liveChordFromToken(token: string): ChordMode {
+  const t = token.toLowerCase();
+  if (t.includes("min7") || t.includes("m7") || t.includes("minor7")) return "MIN7";
+  if (t.includes("sus2")) return "SUS2";
+  if (t.includes("sus4")) return "SUS4";
+  if (t.includes("oct")) return "OCTAVE";
+  if (t.includes("power") || t.includes("pwr") || t.includes(":5")) return "POWER";
+  if (t.includes("min") || /[a-g]#?m\b/i.test(t)) return "MINOR";
+  return "SINGLE";
+}
+
+function liveNoteFromToken(token: string, track: TrackId, index: number) {
+  const clean = token.trim().replace(/[,;]+$/g, "");
+  const noteMatch = clean.match(/^([A-Ga-g]#?)(-?\d)?(?::?([A-Za-z0-9]+))?$/);
+  if (!noteMatch) return defaultNoteForTrack(track, index);
+  const name = noteMatch[1].toUpperCase();
+  const octave = noteMatch[2] ?? (track === "BASS" ? "1" : "3");
+  return `${name}${octave}`;
+}
+
+function expandLiveTokens(raw: string) {
+  const compact = raw.trim();
+  if (/^[xXoO1*._~\-\s]+$/.test(compact) && !compact.includes(" ")) {
+    return compact.split("");
+  }
+  return raw.split(/\s+/).map((t) => t.trim()).filter(Boolean);
+}
+
+function buildLiveEuclideanTrack(track: TrackId, hits: number, length = steps, rotate = 0) {
+  const safeLength = Math.max(1, Math.min(steps, Math.round(length || steps)));
+  const flags = euclideanPattern(safeLength, hits, rotate);
+  return Array.from({ length: steps }, (_, i) => ({
+    ...makeStep(i < safeLength && Boolean(flags[i]), track, i),
+    probability: 100,
+    ratchet: RATCHET_TRACKS.has(track) && i % 4 === 3 ? 2 : 1,
+    velocity: i % 4 === 0 ? 100 : 70,
+  }));
+}
+
+function buildLiveTrack(track: TrackId, body: string, previousLane: Step[]) {
+  const tokens = expandLiveTokens(body);
+  const lane = Array.from({ length: steps }, (_, i) => normalizeStep(previousLane[i] || makeStep(false, track, i), track, i));
+  if (!tokens.length) return { lane, length: trackLengthsFallback(track) };
+
+  const safeLength = Math.max(1, Math.min(steps, tokens.length));
+  for (let i = 0; i < steps; i++) {
+    const token = tokens[i % safeLength] || ".";
+    const rest = token === "." || token === "~" || token === "-" || token === "_" || token === "0";
+    const hit = ["x", "X", "o", "O", "1", "*"].includes(token);
+    const noteLike = /^[A-Ga-g]#?-?\d?(?::?[A-Za-z0-9]+)?$/.test(token);
+
+    if (i >= safeLength) {
+      lane[i] = { ...lane[i], active: false };
+    } else if (track === "BASS" || track === "SYNTH") {
+      lane[i] = {
+        ...lane[i],
+        active: !rest && (hit || noteLike),
+        note: noteLike ? liveNoteFromToken(token, track, i) : lane[i].note,
+        gate: token.includes("_") ? "8n" : "16n",
+        chord: track === "SYNTH" ? liveChordFromToken(token) : lane[i].chord,
+        probability: 100,
+        velocity: hit ? 90 : 100,
+      };
+    } else {
+      lane[i] = {
+        ...lane[i],
+        active: hit || noteLike,
+        probability: 100,
+        ratchet: RATCHET_TRACKS.has(track) && token === "*" ? 4 : lane[i].ratchet,
+        velocity: token === "o" || token === "O" ? 70 : 100,
+      };
+    }
+  }
+
+  return { lane, length: safeLength };
+}
+
+function trackLengthsFallback(track: TrackId) {
+  return DEFAULT_TRACK_LENGTHS[track] || steps;
+}
+
+function parsePhaseLiveCode(
+  code: string,
+  currentPattern: Step[][],
+  currentLengths: Record<TrackId, number>
+): {
+  pattern: Step[][];
+  lengths: Record<TrackId, number>;
+  bpm?: number;
+  knobs: Partial<{ groove: number; chaos: number; density: number; phase: number }>;
+  status: string;
+} {
+  let nextPattern = normalizePattern(currentPattern);
+  let nextLengths = { ...currentLengths };
+  const knobUpdates: Partial<{ groove: number; chaos: number; density: number; phase: number }> = {};
+  let nextBpm: number | undefined;
+  let touched = 0;
+  const messages: string[] = [];
+
+  const lines = code
+    .split("\n")
+    .map((line) => line.replace(/\/\/.*$/g, "").replace(/#.*$/g, "").trim())
+    .filter(Boolean);
+
+  lines.forEach((line) => {
+    const parts = line.split(/\s+/);
+    const head = parts[0]?.toLowerCase();
+    if (!head) return;
+
+    if (["bpm", "tempo"].includes(head)) {
+      const value = Number(parts[1]);
+      if (Number.isFinite(value)) nextBpm = Math.max(80, Math.min(180, value));
+      return;
+    }
+
+    if (["swing", "groove", "chaos", "density", "phase"].includes(head)) {
+      const value = Number(parts[1]);
+      if (Number.isFinite(value)) {
+        const key = head === "swing" ? "groove" : head as keyof typeof knobUpdates;
+        knobUpdates[key] = Math.max(0, Math.min(100, value));
+      }
+      return;
+    }
+
+    if (head === "euclid" || head === "euclidean") {
+      const track = liveAliasToTrack(parts[1] || "");
+      if (!track) return;
+      const hits = Number(parts[2]);
+      const length = Number(parts[3] || steps);
+      const rotate = Number(parts[4] || 0);
+      const row = tracks.indexOf(track);
+      if (row >= 0 && Number.isFinite(hits)) {
+        nextPattern[row] = buildLiveEuclideanTrack(track, hits, length, rotate);
+        nextLengths[track] = Math.max(1, Math.min(steps, Math.round(length || steps)));
+        touched += 1;
+      }
+      return;
+    }
+
+    const track = liveAliasToTrack(parts[0] || "");
+    if (!track) return;
+
+    const row = tracks.indexOf(track);
+    if (row < 0) return;
+
+    if (parts[1]?.toLowerCase() === "euclid" || parts[1]?.toLowerCase() === "euclidean") {
+      const hits = Number(parts[2]);
+      const length = Number(parts[3] || steps);
+      const rotate = Number(parts[4] || 0);
+      if (Number.isFinite(hits)) {
+        nextPattern[row] = buildLiveEuclideanTrack(track, hits, length, rotate);
+        nextLengths[track] = Math.max(1, Math.min(steps, Math.round(length || steps)));
+        touched += 1;
+      }
+      return;
+    }
+
+    const body = line.slice(parts[0].length).trim();
+    const built = buildLiveTrack(track, body, nextPattern[row]);
+    nextPattern[row] = built.lane;
+    nextLengths[track] = built.length;
+    touched += 1;
+  });
+
+  if (typeof nextBpm === "number") messages.push(`BPM ${nextBpm}`);
+  const knobKeys = Object.keys(knobUpdates);
+  if (knobKeys.length) messages.push(`${knobKeys.join(" / ")} updated`);
+  messages.push(`${touched} lane${touched === 1 ? "" : "s"} compiled`);
+
+  return {
+    pattern: nextPattern,
+    lengths: nextLengths,
+    bpm: nextBpm,
+    knobs: knobUpdates,
+    status: `PHASE LIVE: ${messages.join(" · ")}`,
+  };
+}
+
 // ─── Mixer helper ─────────────────────────────────────────────────────────────
 
 function getEffectiveMute(id: TrackId, mutes: Record<TrackId, boolean>, solos: Record<TrackId, boolean>) {
@@ -620,6 +855,8 @@ export default function Home() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [presetName, setPresetName]   = useState("Dark Pattern 01");
   const [presetStatus, setPresetStatus] = useState("No preset loaded");
+  const [liveCode, setLiveCode]       = useState(LIVE_CODE_DEFAULT);
+  const [liveStatus, setLiveStatus]   = useState("PHASE LIVE ready");
 
   const synths       = useRef<any>(null);
   const sequenceRef  = useRef<Tone.Sequence | null>(null);
@@ -2757,6 +2994,53 @@ export default function Home() {
   }
 
   const anySoloed = tracks.some((id) => solos[id]);
+
+  // ── PHASE LIVE CODE ─────────────────────────────────────────────────────────
+
+  function runLiveCode() {
+    const result = parsePhaseLiveCode(liveCode, patternRef.current, trackLengthsRef.current);
+
+    setPattern(result.pattern);
+    patternRef.current = result.pattern;
+
+    setTrackLengths(result.lengths);
+    trackLengthsRef.current = result.lengths;
+
+    if (typeof result.bpm === "number") setBpm(result.bpm);
+
+    if (Object.keys(result.knobs).length) {
+      setKnobs((prev) => ({ ...prev, ...result.knobs }));
+      knobsRef.current = { ...knobsRef.current, ...result.knobs };
+    }
+
+    setLiveStatus(result.status);
+  }
+
+  function clearLiveCode() {
+    setLiveCode("");
+    setLiveStatus("PHASE LIVE cleared");
+  }
+
+  function randomLiveCode() {
+    const next = LIVE_CODE_RANDOMS[Math.floor(Math.random() * LIVE_CODE_RANDOMS.length)] || LIVE_CODE_DEFAULT;
+    setLiveCode(next);
+    const result = parsePhaseLiveCode(next, patternRef.current, trackLengthsRef.current);
+
+    setPattern(result.pattern);
+    patternRef.current = result.pattern;
+
+    setTrackLengths(result.lengths);
+    trackLengthsRef.current = result.lengths;
+
+    if (typeof result.bpm === "number") setBpm(result.bpm);
+
+    if (Object.keys(result.knobs).length) {
+      setKnobs((prev) => ({ ...prev, ...result.knobs }));
+      knobsRef.current = { ...knobsRef.current, ...result.knobs };
+    }
+
+    setLiveStatus(result.status);
+  }
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -5106,7 +5390,154 @@ export default function Home() {
           display: none !important;
           opacity: 0 !important;
         }
-      `}</style>
+      `}
+        /* ── PHASE LIVE CODE ── */
+        .ph-live-card {
+          margin-top: 8px;
+          border: 1px solid rgba(155,108,255,0.22);
+          background:
+            linear-gradient(180deg, rgba(13,18,26,0.96), rgba(5,8,12,0.98)),
+            radial-gradient(circle at 12% 0%, rgba(155,108,255,0.20), transparent 42%);
+          box-shadow: 0 18px 60px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.055);
+          overflow: hidden;
+        }
+        .ph-live-head {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 10px;
+          align-items: center;
+          padding: 10px 12px;
+          border-bottom: 1px solid rgba(255,255,255,0.065);
+          background: linear-gradient(90deg, rgba(155,108,255,0.12), rgba(131,189,255,0.04), transparent);
+        }
+        .ph-live-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          font-family: 'Inter', system-ui, sans-serif;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: .20em;
+          color: #f4efff;
+        }
+        .ph-live-cursor {
+          width: 7px;
+          height: 14px;
+          border-radius: 2px;
+          background: #9b6cff;
+          box-shadow: 0 0 16px rgba(155,108,255,0.9);
+          animation: phBlink 1s steps(2, start) infinite;
+        }
+        @keyframes phBlink { 50% { opacity: .18; } }
+        .ph-live-sub {
+          margin-top: 4px;
+          font-size: 9px;
+          color: #788292;
+          letter-spacing: .10em;
+          text-transform: uppercase;
+        }
+        .ph-live-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        .ph-live-run, .ph-live-secondary {
+          height: 28px;
+          border: 1px solid rgba(255,255,255,0.09);
+          border-radius: 8px;
+          padding: 0 10px;
+          cursor: pointer;
+          color: #f5f7fb;
+          font-family: 'DM Mono', monospace;
+          font-size: 10px;
+          text-transform: uppercase;
+          letter-spacing: .12em;
+          transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+        }
+        .ph-live-run {
+          border-color: rgba(155,108,255,0.62);
+          background: linear-gradient(180deg, rgba(155,108,255,0.38), rgba(82,53,170,0.82));
+          box-shadow: 0 0 24px rgba(155,108,255,0.20), inset 0 1px 0 rgba(255,255,255,0.14);
+        }
+        .ph-live-secondary {
+          background: rgba(255,255,255,0.045);
+        }
+        .ph-live-run:hover, .ph-live-secondary:hover {
+          transform: translateY(-1px);
+          border-color: rgba(205,187,255,0.72);
+          box-shadow: 0 0 22px rgba(155,108,255,0.22);
+        }
+        .ph-live-body {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 260px;
+          gap: 10px;
+          padding: 10px;
+        }
+        .ph-live-editor-wrap {
+          position: relative;
+          min-width: 0;
+          border: 1px solid rgba(255,255,255,0.065);
+          border-radius: 10px;
+          background:
+            linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 16px 16px,
+            linear-gradient(180deg, rgba(255,255,255,0.022) 1px, transparent 1px) 0 0 / 16px 16px,
+            rgba(0,0,0,0.26);
+          overflow: hidden;
+        }
+        .ph-live-editor {
+          width: 100%;
+          min-height: 190px;
+          resize: vertical;
+          outline: none;
+          border: 0;
+          padding: 12px 13px;
+          background: transparent;
+          color: #dfffe9;
+          caret-color: #efe36b;
+          font-family: 'DM Mono', 'Fira Mono', monospace;
+          font-size: 12px;
+          line-height: 1.55;
+          tab-size: 2;
+        }
+        .ph-live-editor::placeholder { color: rgba(223,255,233,0.34); }
+        .ph-live-panel {
+          min-width: 0;
+          border: 1px solid rgba(255,255,255,0.065);
+          border-radius: 10px;
+          padding: 10px;
+          background: rgba(255,255,255,0.035);
+        }
+        .ph-live-status {
+          margin-bottom: 9px;
+          color: #cdbbff;
+          font-size: 10px;
+          line-height: 1.35;
+          letter-spacing: .06em;
+        }
+        .ph-live-help {
+          display: grid;
+          gap: 6px;
+          color: #9aa4b4;
+          font-size: 9px;
+          line-height: 1.35;
+        }
+        .ph-live-help code {
+          color: #efe36b;
+          background: rgba(0,0,0,0.28);
+          border: 1px solid rgba(255,255,255,0.055);
+          border-radius: 5px;
+          padding: 1px 5px;
+        }
+        @media (max-width: 920px) {
+          .ph-live-body { grid-template-columns: 1fr; }
+          .ph-live-head { grid-template-columns: 1fr; }
+          .ph-live-actions { justify-content: flex-start; }
+        }
+
+        </style>
 
       <input ref={fileInputRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={handleFileChange} />
 
@@ -5158,6 +5589,42 @@ export default function Home() {
             <button className="ph-small-icon"><Settings size={17} /></button>
           </div>
         </header>
+
+        {/* ── PHASE LIVE CODE ── */}
+        <section className="ph-card ph-live-card">
+          <div className="ph-live-head">
+            <div>
+              <div className="ph-live-title"><span className="ph-live-cursor" /> PHASE LIVE CODE</div>
+              <div className="ph-live-sub">tracker syntax · code to matrix · techno performance layer</div>
+            </div>
+            <div className="ph-live-actions">
+              <button className="ph-live-run" onClick={runLiveCode}>Run</button>
+              <button className="ph-live-secondary" onClick={randomLiveCode}>Random</button>
+              <button className="ph-live-secondary" onClick={clearLiveCode}>Clear</button>
+            </div>
+          </div>
+          <div className="ph-live-body">
+            <div className="ph-live-editor-wrap">
+              <textarea
+                className="ph-live-editor"
+                value={liveCode}
+                onChange={(e) => setLiveCode(e.target.value)}
+                spellCheck={false}
+                placeholder="kick x...x...x...x...&#10;hat .x.x.x.x.x.x.x.x&#10;bass D1 ~ F1 ~ A1 ~ C2 ~"
+              />
+            </div>
+            <aside className="ph-live-panel">
+              <div className="ph-live-status">{liveStatus}</div>
+              <div className="ph-live-help">
+                <span><code>x</code> active step · <code>.</code>/<code>~</code> rest</span>
+                <span><code>bpm 140</code> · <code>swing 48</code> · <code>chaos 30</code></span>
+                <span><code>hat euclid 7 16 1</code> generates Euclidean rhythm</span>
+                <span><code>bass D1 ~ F1 ~ A1 ~</code> writes notes into the bass lane</span>
+                <span><code>synth A3:min7</code> · <code>F3:sus2</code> · <code>G3:power</code></span>
+              </div>
+            </aside>
+          </div>
+        </section>
 
         {/* ── Main layout ── */}
         <div className="ph-layout">
