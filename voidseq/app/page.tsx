@@ -66,6 +66,7 @@ type SynthLfoTarget = "filter" | "pitch" | "fm" | "volume"; // "fm" is used as C
 type ChordMode = "SINGLE" | "MINOR" | "SUS2" | "SUS4" | "MIN7" | "OCTAVE" | "POWER";
 type ArpMode = "OFF" | "UP" | "DOWN" | "UPDOWN" | "RANDOM" | "OCTAVE" | "RATCHET";
 type ArpRate = "8n" | "16n" | "32n" | "16t";
+type EngineMode = "tone" | "strudel";
 
 interface SynthVoiceState {
   waveform: SynthWaveform;
@@ -620,16 +621,27 @@ export default function Home() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [presetName, setPresetName]   = useState("Dark Pattern 01");
   const [presetStatus, setPresetStatus] = useState("No preset loaded");
-  const [liveCode, setLiveCode] = useState(`PHASE GENERATOR
-Visual generative mode active.
-Use the generator controls above to create grooves.
-Mood: Melodark
-Engine: Techno Generative`);
+  const [liveCode, setLiveCode] = useState(`// PHASE LIVE CODE — Strudel-inspired syntax
+// Supported: s("bd hh sd hh"), note("D1 ~ F1 ~").s("bass"), euclid, bpm, swing
+bpm 138
+swing 18
+stack(
+  s("bd ~ bd ~").struct("x...x...x...x...")
+  s("~ hh ~ hh").fast(2)
+  s("~ ~ cp ~").struct("....x.......x...")
+  note("D1 ~ F1 ~ A1 ~ C2 ~").s("bass")
+  note("D3:MIN7 ~ F3:SUS2 ~ A3:POWER ~ C4:MINOR ~").s("synth")
+)
+euclid percA 5 16 2
+euclid texture 2 16 9
+melodark`);
   const [liveStatus, setLiveStatus] = useState("ready");
+  const [engineMode, setEngineMode] = useState<EngineMode>("tone");
+  const [strudelStatus, setStrudelStatus] = useState("Strudel engine idle");
   const [generator, setGenerator] = useState({
-    mood: "hypnotic" as "melodark" | "hypnotic" | "acid" | "industrial" | "melodic",
-    density: 74,
-    complexity: 72,
+    mood: "melodark" as "melodark" | "hypnotic" | "acid" | "industrial" | "melodic",
+    density: 62,
+    complexity: 58,
     darkness: 70,
     acid: 24,
     bassMotion: 54,
@@ -639,6 +651,9 @@ Engine: Techno Generative`);
 
   const synths       = useRef<any>(null);
   const sequenceRef  = useRef<Tone.Sequence | null>(null);
+  const strudelSchedulerRef = useRef<any>(null);
+  const strudelModulesRef = useRef<any>(null);
+  const strudelReadyRef = useRef(false);
   const patternRef   = useRef(pattern);
   const knobsRef     = useRef(knobs);
   const masterFxRef  = useRef(masterFx);
@@ -742,6 +757,19 @@ Engine: Techno Generative`);
   useEffect(() => { mutesRef.current = mutes; applyMixerState(mutes, solosRef.current); }, [mutes]);
   useEffect(() => { solosRef.current = solos; applyMixerState(mutesRef.current, solos); }, [solos]);
   useEffect(() => { Tone.Transport.bpm.value = bpm; }, [bpm]);
+  useEffect(() => {
+    if (engineMode === "tone") {
+      try { strudelSchedulerRef.current?.stop?.(); } catch (_) {}
+      setStrudelStatus("Strudel idle");
+    } else {
+      stopPlayback();
+      setStrudelStatus("Strudel selected · press Play");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engineMode]);
+  useEffect(() => { refreshStrudelPatternIfPlaying();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generator]);
 
   useEffect(() => {
     try {
@@ -773,6 +801,7 @@ Engine: Techno Generative`);
 
   useEffect(() => {
     return () => {
+      try { strudelSchedulerRef.current?.stop?.(); } catch (_) {}
       Tone.Transport.stop();
       Tone.Transport.cancel();
       sequenceRef.current?.dispose();
@@ -1843,6 +1872,136 @@ Engine: Techno Generative`);
     }
   }
 
+
+  function buildStrudelVisualPattern(strudel: any) {
+    const g = generator;
+    const density = g.density / 100;
+    const complexity = g.complexity / 100;
+    const dark = g.darkness / 100;
+    const acid = g.acid / 100;
+    const bassMotion = g.bassMotion / 100;
+    const synthMotion = g.synthMotion / 100;
+
+    const kickMini = density > 0.72 ? "bd ~ bd [~ bd]" : density < 0.38 ? "bd ~ ~ ~" : "bd ~ bd ~";
+    const hatMini = complexity > 0.68 ? "[~ hh]*2 hh*2 ~ hh" : density > 0.55 ? "~ hh ~ hh" : "~ hh ~ ~";
+    const clapMini = complexity > 0.52 ? "~ ~ cp ~" : "~ ~ ~ cp";
+    const percMini = complexity > 0.7 ? "~ rim ~ mt ~ rim [~ rim] ~" : "~ rim ~ ~ mt ~ ~ rim";
+    const textureMini = dark > 0.58 ? "~ ~ ~ noise ~ ~ noise ~" : "~ ~ ~ ~ noise ~ ~ ~";
+
+    const bassNotes = g.mood === "acid"
+      ? "d2 ~ d2 f2 a1 ~ c2 ~"
+      : bassMotion > 0.66
+        ? "d1 ~ f1 ~ a1 c2 a1 ~"
+        : "d1 ~ ~ ~ d1 ~ f1 ~";
+
+    const synthNotes = g.mood === "melodic"
+      ? "d3 f3 a3 c4 <a3 c4> f3"
+      : synthMotion > 0.62
+        ? "d3 f3 a3 c4 a3 f3"
+        : "d3 ~ f3 ~ a3 ~ c4 ~";
+
+    const room = Math.max(0.05, Math.min(0.65, 0.12 + dark * 0.32 + synthMotion * 0.18));
+    const drive = Math.max(0.02, Math.min(0.75, 0.08 + dark * 0.28 + acid * 0.38));
+    const lpf = Math.round(380 + (1 - dark) * 2600 + acid * 2200);
+    const lpq = Math.round(3 + acid * 14 + dark * 5);
+    const hatGain = 0.26 + density * 0.36;
+
+    const S: any = strudel.sound as any;
+    const N: any = strudel.note as any;
+    const Stack: any = strudel.stack as any;
+
+    return Stack(
+      S(kickMini).gain(0.95).distort(drive).room(0.06 + dark * 0.10),
+      S(hatMini).gain(hatGain).hpf(5200 + complexity * 2600).pan("<-.18 .18>").speed("<1 .98 1.02>"),
+      S(clapMini).gain(0.36 + complexity * 0.22).room(room * 0.75).delay(0.08 + complexity * 0.10),
+      S(percMini).gain(0.22 + complexity * 0.32).hpf(900).lpf(5200 + acid * 3200).room(room * 0.5),
+      S(textureMini).gain(0.08 + dark * 0.16).hpf(1600).room(room).delay(0.12 + synthMotion * 0.22),
+      N(bassNotes).s("sawtooth").gain(0.48).lpf(lpf).lpq(lpq).distort(drive).legato(0.18 + bassMotion * 0.38),
+      N(synthNotes).s(g.mood === "industrial" ? "square" : "sawtooth").gain(0.26 + synthMotion * 0.16).lpf(700 + synthMotion * 4200).lpq(4 + acid * 7).room(room).delay(0.12 + synthMotion * 0.18)
+    );
+  }
+
+  async function loadStrudelModules() {
+    if (strudelModulesRef.current) return strudelModulesRef.current;
+
+    // Next.js evaluates modules during build/SSR. Strudel touches window/audio globals,
+    // so it must be imported only inside the browser, after user interaction.
+    if (typeof window === "undefined") return null;
+
+    const core = await import("@strudel/core");
+    const webaudio = await import("@strudel/webaudio");
+    const modules = { ...core, ...webaudio };
+    strudelModulesRef.current = modules;
+    return modules;
+  }
+
+  async function ensureStrudelEngine() {
+    const strudel = await loadStrudelModules();
+    if (!strudel) return null;
+
+    if (strudelReadyRef.current && strudelSchedulerRef.current) {
+      return { scheduler: strudelSchedulerRef.current, strudel };
+    }
+
+    try {
+      strudel.initAudioOnFirstClick?.();
+      const ctx = strudel.getAudioContext?.();
+      const result = strudel.repl({
+        defaultOutput: strudel.webaudioOutput,
+        getTime: () => ctx?.currentTime ?? 0,
+      });
+      strudelSchedulerRef.current = result.scheduler;
+      strudelReadyRef.current = true;
+      setStrudelStatus("Strudel engine ready");
+      return { scheduler: result.scheduler, strudel };
+    } catch (error) {
+      console.error(error);
+      setStrudelStatus("Strudel engine failed. Check @strudel/core @strudel/webaudio install");
+      return null;
+    }
+  }
+
+  async function playStrudelEngine() {
+    try {
+      await Tone.start();
+    } catch (_) {}
+    const engine = await ensureStrudelEngine();
+    if (!engine) return;
+    const { scheduler, strudel } = engine;
+    try {
+      const ctx = strudel.getAudioContext?.();
+      if (ctx?.state !== "running") await ctx.resume();
+    } catch (_) {}
+    try {
+      scheduler.setPattern(buildStrudelVisualPattern(strudel));
+      scheduler.start();
+      setPlaying(true);
+      setStrudelStatus(`Strudel playing · ${generator.mood} · density ${generator.density}`);
+    } catch (error) {
+      console.error(error);
+      setStrudelStatus("Strudel pattern failed");
+    }
+  }
+
+  function stopStrudelEngine() {
+    try { strudelSchedulerRef.current?.stop?.(); } catch (_) {}
+    setPlaying(false);
+    setActiveStep(-1);
+    setStrudelStatus("Strudel stopped");
+  }
+
+  async function refreshStrudelPatternIfPlaying() {
+    if (engineMode !== "strudel" || !playing || !strudelSchedulerRef.current) return;
+    try {
+      const strudel = await loadStrudelModules();
+      if (!strudel) return;
+      strudelSchedulerRef.current.setPattern(buildStrudelVisualPattern(strudel));
+      setStrudelStatus(`Strudel updated · ${generator.mood}`);
+    } catch (error) {
+      console.error(error);
+    }
+  }
+
   function stopPlayback() {
     Tone.Transport.stop();
     Tone.Transport.cancel();
@@ -1901,6 +2060,12 @@ Engine: Techno Generative`);
   }
 
   async function togglePlay() {
+    if (engineMode === "strudel") {
+      if (playing) stopStrudelEngine();
+      else await playStrudelEngine();
+      return;
+    }
+
     await unlockAndroidAudio();
 
     if (playing) {
@@ -5860,6 +6025,8 @@ nextPattern[row] = euclidSteps;
               <span>visual generative techno engine · no coding</span>
             </div>
             <div className="ph-live-actions">
+              <button className={engineMode === "tone" ? "ph-live-run" : "ph-live-btn"} onClick={() => setEngineMode("tone")}>TONE</button>
+              <button className={engineMode === "strudel" ? "ph-live-run" : "ph-live-btn"} onClick={() => setEngineMode("strudel")}>STRUDEL</button>
               <button className="ph-live-run" onClick={() => generateVisualPattern("generate")}>GENERATE</button>
               <button className="ph-live-btn" onClick={() => generateVisualPattern("mutate")}>MUTATE</button>
               <button className="ph-live-btn" onClick={randomizeGeneratorControls}>RANDOMIZE</button>
@@ -5906,7 +6073,7 @@ nextPattern[row] = euclidSteps;
             </div>
 
             <div className="ph-gen-right">
-              <div className="ph-live-status">{liveStatus}</div>
+              <div className="ph-live-status">{engineMode === "strudel" ? strudelStatus : liveStatus}</div>
               <div className="ph-gen-perform">
                 <button onClick={() => generateVisualPattern("minimal")}>MORE MINIMAL</button>
                 <button onClick={() => generateVisualPattern("dense")}>MORE DENSE</button>
