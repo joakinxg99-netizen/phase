@@ -2966,7 +2966,9 @@ melodark`);
       .filter((line) => !/^\s*(stack|cat|slowcat|seq)\s*\(?\s*$/i.test(line))
       .filter((line) => line !== ")" && line !== ")," && line !== "},");
 
-    const nextPattern = normalizePattern(patternRef.current).map((lane) => lane.map((step) => ({ ...step, locks: step.locks ? { ...step.locks } : undefined })));
+    const nextPattern: Step[][] = patternRef.current.map((lane, row) =>
+  lane.map((step, col) => normalizeStep(step, tracks[row], col))
+);
     const nextLengths = { ...trackLengthsRef.current };
     const nextEuclidean = normalizeEuclidean(euclideanRef.current);
     const clearedStrudelTracks = new Set<TrackId>();
@@ -3050,7 +3052,11 @@ melodark`);
           const row = tracks.indexOf(track);
           const len = Math.max(1, Math.min(16, Number.isFinite(length) ? length : 16));
           const euclid = euclideanPattern(len, hits, Number.isFinite(rotate) ? rotate : 0);
-          nextPattern[row] = Array.from({ length: steps }, (_, i) => makeStep(Boolean(euclid[i % len]), track, i));
+          const euclidSteps: Step[] = Array.from({ length: steps }, (_, i) =>
+  makeStep(Boolean(euclid[i % len]), track, i)
+);
+
+nextPattern[row] = euclidSteps;
           nextLengths[track] = len;
           nextEuclidean[track] = { enabled: false, hits: Math.max(0, Math.min(len, hits)), rotate: Number.isFinite(rotate) ? rotate : 0 };
           touched += 1;
