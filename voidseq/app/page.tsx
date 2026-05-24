@@ -620,25 +620,16 @@ export default function Home() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [presetName, setPresetName]   = useState("Dark Pattern 01");
   const [presetStatus, setPresetStatus] = useState("No preset loaded");
-  const [liveCode, setLiveCode] = useState(`// PHASE LIVE CODE — Strudel-inspired syntax
-// Supported: s("bd hh sd hh"), note("D1 ~ F1 ~").s("bass"), euclid, bpm, swing
-bpm 138
-swing 18
-stack(
-  s("bd ~ bd ~").struct("x...x...x...x...")
-  s("~ hh ~ hh").fast(2)
-  s("~ ~ cp ~").struct("....x.......x...")
-  note("D1 ~ F1 ~ A1 ~ C2 ~").s("bass")
-  note("D3:MIN7 ~ F3:SUS2 ~ A3:POWER ~ C4:MINOR ~").s("synth")
-)
-euclid percA 5 16 2
-euclid texture 2 16 9
-melodark`);
+  const [liveCode, setLiveCode] = useState(`PHASE GENERATOR
+Visual generative mode active.
+Use the generator controls above to create grooves.
+Mood: Melodark
+Engine: Techno Generative`);
   const [liveStatus, setLiveStatus] = useState("ready");
   const [generator, setGenerator] = useState({
-    mood: "melodark" as "melodark" | "hypnotic" | "acid" | "industrial" | "melodic",
-    density: 62,
-    complexity: 58,
+    mood: "hypnotic" as "melodark" | "hypnotic" | "acid" | "industrial" | "melodic",
+    density: 74,
+    complexity: 72,
     darkness: 70,
     acid: 24,
     bassMotion: 54,
