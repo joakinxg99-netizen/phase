@@ -566,241 +566,6 @@ function generatePattern(density = 58): Step[][] {
   );
 }
 
-const LIVE_CODE_DEFAULT = `// PHASE LIVE CODE
-// x = on · . or ~ = off · notes write directly to BASS/SYNTH
-bpm 138
-swing 42
-kick x...x...x...x...
-hat .x.x.x.x.x.x.x.x
-percA ..x...x...x...x.
-percB ....x.....x...x.
-texture .......x.......x
-bass D1 ~ D1 ~ F1 ~ A1 ~ C2 ~ A1 ~ G1 ~
-synth D3:min7 ~ F3:sus2 ~ A3:min ~ C4:oct ~`;
-
-const LIVE_CODE_RANDOMS = [
-  `bpm 138
-swing 46
-chaos 22
-kick x...x...x...x...
-hat .x.x.x.x.x.x.x.x
-percA ..x...x...x...x.
-percB .....x...x....x.
-texture ........x.......
-bass D1 ~ D1 ~ F1 ~ A1 ~ C2 ~ A1 ~ G1 ~
-synth D3:min7 ~ ~ ~ F3:sus2 ~ ~ ~ A3:min ~ ~ ~ C4:oct ~ ~ ~`,
-  `bpm 142
-swing 54
-chaos 34
-kick x...x...x...x...
-hat x.xx.xx.x.xx.xx.
-percA ..x.x...x...x...
-percB ....x.....x.x...
-texture .......x.......x
-bass D1 D1 ~ F1 A1 ~ C2 ~ A1 ~ G1 ~ F1 ~ A1 ~
-synth A3:min ~ C4:sus4 ~ G3:power ~ F3:min7 ~`,
-  `bpm 136
-swing 38
-phase 72
-kick x...x...x...x...
-hat .x..xx.x.x..xx.x
-percA euclid 5 16 2
-percB euclid 3 16 5
-texture ....x.......x...
-bass D1 ~ A1 ~ C2 ~ A1 ~ G1 ~ F1 ~ D1 ~ A1 ~
-synth F3:sus2 ~ ~ A3:min ~ ~ C4:min7 ~ ~ G3:power ~ ~`
-];
-
-function liveAliasToTrack(alias: string): TrackId | null {
-  const key = alias.trim().toLowerCase().replace(/[\s_-]/g, "");
-  if (["k", "kick", "bd"].includes(key)) return "KICK";
-  if (["h", "hat", "hh", "hihat", "hiHat".toLowerCase()].includes(key)) return "HAT";
-  if (["pa", "perca", "perc", "percussion", "snare", "snr", "clap"].includes(key)) return "PERC A";
-  if (["pb", "percb", "perc2", "rim", "rimshot"].includes(key)) return "PERC B";
-  if (["fx", "texture", "tex", "noise", "atmos"].includes(key)) return "TEXTURE";
-  if (["b", "bass", "sub"].includes(key)) return "BASS";
-  if (["s", "synth", "lead", "pad", "chord", "chords"].includes(key)) return "SYNTH";
-  return null;
-}
-
-function liveChordFromToken(token: string): ChordMode {
-  const t = token.toLowerCase();
-  if (t.includes("min7") || t.includes("m7") || t.includes("minor7")) return "MIN7";
-  if (t.includes("sus2")) return "SUS2";
-  if (t.includes("sus4")) return "SUS4";
-  if (t.includes("oct")) return "OCTAVE";
-  if (t.includes("power") || t.includes("pwr") || t.includes(":5")) return "POWER";
-  if (t.includes("min") || /[a-g]#?m\b/i.test(t)) return "MINOR";
-  return "SINGLE";
-}
-
-function liveNoteFromToken(token: string, track: TrackId, index: number) {
-  const clean = token.trim().replace(/[,;]+$/g, "");
-  const noteMatch = clean.match(/^([A-Ga-g]#?)(-?\d)?(?::?([A-Za-z0-9]+))?$/);
-  if (!noteMatch) return defaultNoteForTrack(track, index);
-  const name = noteMatch[1].toUpperCase();
-  const octave = noteMatch[2] ?? (track === "BASS" ? "1" : "3");
-  return `${name}${octave}`;
-}
-
-function expandLiveTokens(raw: string) {
-  const compact = raw.trim();
-  if (/^[xXoO1*._~\-\s]+$/.test(compact) && !compact.includes(" ")) {
-    return compact.split("");
-  }
-  return raw.split(/\s+/).map((t) => t.trim()).filter(Boolean);
-}
-
-function buildLiveEuclideanTrack(track: TrackId, hits: number, length = steps, rotate = 0) {
-  const safeLength = Math.max(1, Math.min(steps, Math.round(length || steps)));
-  const flags = euclideanPattern(safeLength, hits, rotate);
-  return Array.from({ length: steps }, (_, i) => ({
-    ...makeStep(i < safeLength && Boolean(flags[i]), track, i),
-    probability: 100,
-    ratchet: RATCHET_TRACKS.has(track) && i % 4 === 3 ? 2 : 1,
-    velocity: i % 4 === 0 ? 100 : 70,
-  }));
-}
-
-function buildLiveTrack(track: TrackId, body: string, previousLane: Step[]) {
-  const tokens = expandLiveTokens(body);
-  const lane = Array.from({ length: steps }, (_, i) => normalizeStep(previousLane[i] || makeStep(false, track, i), track, i));
-  if (!tokens.length) return { lane, length: trackLengthsFallback(track) };
-
-  const safeLength = Math.max(1, Math.min(steps, tokens.length));
-  for (let i = 0; i < steps; i++) {
-    const token = tokens[i % safeLength] || ".";
-    const rest = token === "." || token === "~" || token === "-" || token === "_" || token === "0";
-    const hit = ["x", "X", "o", "O", "1", "*"].includes(token);
-    const noteLike = /^[A-Ga-g]#?-?\d?(?::?[A-Za-z0-9]+)?$/.test(token);
-
-    if (i >= safeLength) {
-      lane[i] = { ...lane[i], active: false };
-    } else if (track === "BASS" || track === "SYNTH") {
-      lane[i] = {
-        ...lane[i],
-        active: !rest && (hit || noteLike),
-        note: noteLike ? liveNoteFromToken(token, track, i) : lane[i].note,
-        gate: token.includes("_") ? "8n" : "16n",
-        chord: track === "SYNTH" ? liveChordFromToken(token) : lane[i].chord,
-        probability: 100,
-        velocity: hit ? 90 : 100,
-      };
-    } else {
-      lane[i] = {
-        ...lane[i],
-        active: hit || noteLike,
-        probability: 100,
-        ratchet: RATCHET_TRACKS.has(track) && token === "*" ? 4 : lane[i].ratchet,
-        velocity: token === "o" || token === "O" ? 70 : 100,
-      };
-    }
-  }
-
-  return { lane, length: safeLength };
-}
-
-function trackLengthsFallback(track: TrackId) {
-  return DEFAULT_TRACK_LENGTHS[track] || steps;
-}
-
-function parsePhaseLiveCode(
-  code: string,
-  currentPattern: Step[][],
-  currentLengths: Record<TrackId, number>
-): {
-  pattern: Step[][];
-  lengths: Record<TrackId, number>;
-  bpm?: number;
-  knobs: Partial<{ groove: number; chaos: number; density: number; phase: number }>;
-  status: string;
-} {
-  let nextPattern = normalizePattern(currentPattern);
-  let nextLengths = { ...currentLengths };
-  const knobUpdates: Partial<{ groove: number; chaos: number; density: number; phase: number }> = {};
-  let nextBpm: number | undefined;
-  let touched = 0;
-  const messages: string[] = [];
-
-  const lines = code
-    .split("\n")
-    .map((line) => line.replace(/\/\/.*$/g, "").replace(/#.*$/g, "").trim())
-    .filter(Boolean);
-
-  lines.forEach((line) => {
-    const parts = line.split(/\s+/);
-    const head = parts[0]?.toLowerCase();
-    if (!head) return;
-
-    if (["bpm", "tempo"].includes(head)) {
-      const value = Number(parts[1]);
-      if (Number.isFinite(value)) nextBpm = Math.max(80, Math.min(180, value));
-      return;
-    }
-
-    if (["swing", "groove", "chaos", "density", "phase"].includes(head)) {
-      const value = Number(parts[1]);
-      if (Number.isFinite(value)) {
-        const key = head === "swing" ? "groove" : head as keyof typeof knobUpdates;
-        knobUpdates[key] = Math.max(0, Math.min(100, value));
-      }
-      return;
-    }
-
-    if (head === "euclid" || head === "euclidean") {
-      const track = liveAliasToTrack(parts[1] || "");
-      if (!track) return;
-      const hits = Number(parts[2]);
-      const length = Number(parts[3] || steps);
-      const rotate = Number(parts[4] || 0);
-      const row = tracks.indexOf(track);
-      if (row >= 0 && Number.isFinite(hits)) {
-        nextPattern[row] = buildLiveEuclideanTrack(track, hits, length, rotate);
-        nextLengths[track] = Math.max(1, Math.min(steps, Math.round(length || steps)));
-        touched += 1;
-      }
-      return;
-    }
-
-    const track = liveAliasToTrack(parts[0] || "");
-    if (!track) return;
-
-    const row = tracks.indexOf(track);
-    if (row < 0) return;
-
-    if (parts[1]?.toLowerCase() === "euclid" || parts[1]?.toLowerCase() === "euclidean") {
-      const hits = Number(parts[2]);
-      const length = Number(parts[3] || steps);
-      const rotate = Number(parts[4] || 0);
-      if (Number.isFinite(hits)) {
-        nextPattern[row] = buildLiveEuclideanTrack(track, hits, length, rotate);
-        nextLengths[track] = Math.max(1, Math.min(steps, Math.round(length || steps)));
-        touched += 1;
-      }
-      return;
-    }
-
-    const body = line.slice(parts[0].length).trim();
-    const built = buildLiveTrack(track, body, nextPattern[row]);
-    nextPattern[row] = built.lane;
-    nextLengths[track] = built.length;
-    touched += 1;
-  });
-
-  if (typeof nextBpm === "number") messages.push(`BPM ${nextBpm}`);
-  const knobKeys = Object.keys(knobUpdates);
-  if (knobKeys.length) messages.push(`${knobKeys.join(" / ")} updated`);
-  messages.push(`${touched} lane${touched === 1 ? "" : "s"} compiled`);
-
-  return {
-    pattern: nextPattern,
-    lengths: nextLengths,
-    bpm: nextBpm,
-    knobs: knobUpdates,
-    status: `PHASE LIVE: ${messages.join(" · ")}`,
-  };
-}
-
 // ─── Mixer helper ─────────────────────────────────────────────────────────────
 
 function getEffectiveMute(id: TrackId, mutes: Record<TrackId, boolean>, solos: Record<TrackId, boolean>) {
@@ -855,8 +620,21 @@ export default function Home() {
   const [selectedPresetId, setSelectedPresetId] = useState("");
   const [presetName, setPresetName]   = useState("Dark Pattern 01");
   const [presetStatus, setPresetStatus] = useState("No preset loaded");
-  const [liveCode, setLiveCode]       = useState(LIVE_CODE_DEFAULT);
-  const [liveStatus, setLiveStatus]   = useState("PHASE LIVE ready");
+  const [liveCode, setLiveCode] = useState(`// PHASE LIVE CODE — Strudel-inspired syntax
+// Supported: s("bd hh sd hh"), note("D1 ~ F1 ~").s("bass"), euclid, bpm, swing
+bpm 138
+swing 18
+stack(
+  s("bd ~ bd ~").struct("x...x...x...x...")
+  s("~ hh ~ hh").fast(2)
+  s("~ ~ cp ~").struct("....x.......x...")
+  note("D1 ~ F1 ~ A1 ~ C2 ~").s("bass")
+  note("D3:MIN7 ~ F3:SUS2 ~ A3:POWER ~ C4:MINOR ~").s("synth")
+)
+euclid percA 5 16 2
+euclid texture 2 16 9
+melodark`);
+  const [liveStatus, setLiveStatus] = useState("ready");
 
   const synths       = useRef<any>(null);
   const sequenceRef  = useRef<Tone.Sequence | null>(null);
@@ -2993,54 +2771,335 @@ export default function Home() {
     setSampleNames((prev) => { const next = { ...prev }; delete next[track]; return next; });
   }
 
-  const anySoloed = tracks.some((id) => solos[id]);
 
-  // ── PHASE LIVE CODE ─────────────────────────────────────────────────────────
+  function normalizeLiveTrackName(name: string): TrackId | null {
+    const key = name.trim().toLowerCase().replace(/[\s_:-]+/g, "");
+    if (["kick", "bd", "bassdrum", "k"].includes(key)) return "KICK";
+    if (["hat", "hh", "hihat", "closedhat", "openhihat", "h"].includes(key)) return "HAT";
+    if (["perca", "perc1", "p1", "snare", "snr", "sd", "cp", "clap", "rim"].includes(key)) return "PERC A";
+    if (["percb", "perc2", "p2", "tom", "lt", "mt", "ht", "808", "909"].includes(key)) return "PERC B";
+    if (["texture", "tex", "fx", "noise", "atmos", "crash", "ride", "rd", "misc"].includes(key)) return "TEXTURE";
+    if (["bass", "b", "sub", "gm_acoustic_bass", "sinebass"].includes(key)) return "BASS";
+    if (["synth", "lead", "pad", "chord", "chords", "saw", "sawtooth", "square", "triangle", "pluck"].includes(key)) return "SYNTH";
+    return null;
+  }
 
-  function runLiveCode() {
-    const result = parsePhaseLiveCode(liveCode, patternRef.current, trackLengthsRef.current);
+  function liveStripComments(line: string) {
+    // Keep this deliberately simple: live scripts are small and readable.
+    return line.replace(/\/\/.*$/g, "").trim();
+  }
 
-    setPattern(result.pattern);
-    patternRef.current = result.pattern;
+  function extractQuotedValues(input: string) {
+    return Array.from(input.matchAll(/["'`]([^"'`]+)["'`]/g)).map((match) => match[1] || "");
+  }
 
-    setTrackLengths(result.lengths);
-    trackLengthsRef.current = result.lengths;
+  function expandTokenDensity(token: string): string[] {
+    const match = token.match(/^(.+?)\*(\d+)$/);
+    if (!match) return [token];
+    const value = match[1] || token;
+    const amount = Math.max(1, Math.min(16, Number(match[2]) || 1));
+    return Array.from({ length: amount }, () => value);
+  }
 
-    if (typeof result.bpm === "number") setBpm(result.bpm);
+  function miniNotationTokens(raw: string) {
+    const cleaned = raw
+      .replace(/[<>\[\](),]/g, " ")
+      .replace(/\|/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
-    if (Object.keys(result.knobs).length) {
-      setKnobs((prev) => ({ ...prev, ...result.knobs }));
-      knobsRef.current = { ...knobsRef.current, ...result.knobs };
+    if (!cleaned) return [] as string[];
+
+    return cleaned
+      .split(" ")
+      .filter(Boolean)
+      .flatMap(expandTokenDensity)
+      .map((token) => token.trim())
+      .filter(Boolean);
+  }
+
+  function buildLivePatternTokens(raw: string) {
+    const compact = raw.replace(/\s+/g, "").trim();
+    if (/^[xXoO1\.\-~_]+$/.test(compact)) {
+      return compact.split("").map((char) => char === "x" || char === "X" || char === "o" || char === "O" || char === "1");
+    }
+    return miniNotationTokens(raw);
+  }
+
+  function strudelSoundToTrack(sound: string): TrackId | null {
+    const first = sound.split(":")[0]?.trim() || sound;
+    return normalizeLiveTrackName(first);
+  }
+
+  function parseLiveNoteToken(token: string, track: TrackId, index: number): Step {
+    const clean = token.trim();
+    if (!clean || /^[\.\-~_]$/.test(clean)) return makeStep(false, track, index);
+    if (/^[xXoO1]$/.test(clean)) return makeStep(true, track, index);
+
+    const [notePart, chordPart] = clean.split(":");
+    const note = /^([A-G]#?-?\d)$/i.test(notePart) ? notePart.toUpperCase().replace(/([A-G]#?)(-?\d)/, (_, n, o) => `${n}${o}`) : defaultNoteForTrack(track, index);
+    const step = makeStep(Boolean(note || clean), track, index);
+
+    if (track === "BASS" || track === "SYNTH") step.note = note || defaultNoteForTrack(track, index);
+
+    if (track === "SYNTH" && chordPart) {
+      const normalizedChord = chordPart.toUpperCase().replace(/[^A-Z0-9]/g, "") as ChordMode;
+      if ((CHORD_MODE_CYCLE as readonly string[]).includes(normalizedChord)) step.chord = normalizedChord;
     }
 
-    setLiveStatus(result.status);
+    return step;
+  }
+
+  function scaleDegreeToNote(token: string, index: number) {
+    if (/^[\.\-~_]$/.test(token)) return ".";
+    const degree = Number(token.replace(/[^\d-]/g, ""));
+    if (!Number.isFinite(degree)) return SYNTH_NOTE_CYCLE[index % SYNTH_NOTE_CYCLE.length];
+    const dMinor = ["D3", "F3", "G3", "A3", "C4", "D4", "F4", "G4"];
+    return dMinor[((degree % dMinor.length) + dMinor.length) % dMinor.length];
+  }
+
+  function applyLanePattern(
+    nextPattern: Step[][],
+    nextLengths: Record<TrackId, number>,
+    nextEuclidean: EuclideanState,
+    track: TrackId,
+    tokens: Array<string | boolean>,
+    overlay = false
+  ) {
+    const row = tracks.indexOf(track);
+    if (row < 0 || !tokens.length) return false;
+
+    const expanded = Array.from({ length: steps }, (_, i) => tokens[i % tokens.length]);
+    const lane = overlay
+      ? nextPattern[row].map((step) => ({ ...step, locks: step.locks ? { ...step.locks } : undefined }))
+      : Array.from({ length: steps }, (_, i) => makeStep(false, track, i));
+
+    expanded.forEach((token, i) => {
+      if (typeof token === "boolean") {
+        if (token) lane[i] = makeStep(true, track, i);
+        else if (!overlay) lane[i] = makeStep(false, track, i);
+        return;
+      }
+
+      const parsed = parseLiveNoteToken(token, track, i);
+      if (parsed.active || !overlay) lane[i] = parsed;
+    });
+
+    nextPattern[row] = lane;
+    nextLengths[track] = Math.min(steps, Math.max(1, tokens.length));
+    if (isEuclideanTrack(track)) nextEuclidean[track] = { ...nextEuclidean[track], enabled: false };
+    return true;
+  }
+
+  function applyStrudelSoundLine(
+    line: string,
+    nextPattern: Step[][],
+    nextLengths: Record<TrackId, number>,
+    nextEuclidean: EuclideanState,
+    cleared: Set<TrackId>
+  ) {
+    const soundCall = line.match(/(?:^|[\s,(.])(?:s|sound)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/i);
+    if (!soundCall) return 0;
+
+    const soundTokens = miniNotationTokens(soundCall[1] || "");
+    const structCall = line.match(/\.struct\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/i);
+    const structTokens = structCall ? buildLivePatternTokens(structCall[1] || "") : null;
+    let touched = 0;
+
+    if (structTokens && soundTokens.length === 1) {
+      const track = strudelSoundToTrack(soundTokens[0] || "");
+      if (!track) return 0;
+      if (!cleared.has(track)) {
+        applyLanePattern(nextPattern, nextLengths, nextEuclidean, track, Array.from({ length: steps }, () => false), false);
+        cleared.add(track);
+      }
+      if (applyLanePattern(nextPattern, nextLengths, nextEuclidean, track, structTokens, true)) touched += 1;
+      return touched;
+    }
+
+    // Strudel-style s("bd hh sd hh"): one quoted sound stream can fill multiple drum lanes.
+    const perTrack: Partial<Record<TrackId, boolean[]>> = {};
+    soundTokens.forEach((sound, i) => {
+      if (/^[\.\-~_]$/.test(sound)) return;
+      const track = strudelSoundToTrack(sound);
+      if (!track) return;
+      if (!perTrack[track]) perTrack[track] = Array.from({ length: soundTokens.length }, () => false);
+      perTrack[track]![i] = true;
+    });
+
+    (Object.entries(perTrack) as Array<[TrackId, boolean[]]>).forEach(([track, tokens]) => {
+      if (!cleared.has(track)) {
+        applyLanePattern(nextPattern, nextLengths, nextEuclidean, track, Array.from({ length: steps }, () => false), false);
+        cleared.add(track);
+      }
+      if (applyLanePattern(nextPattern, nextLengths, nextEuclidean, track, tokens, true)) touched += 1;
+    });
+
+    return touched;
+  }
+
+  function applyStrudelNoteLine(
+    line: string,
+    nextPattern: Step[][],
+    nextLengths: Record<TrackId, number>,
+    nextEuclidean: EuclideanState
+  ) {
+    const noteCall = line.match(/(?:^|[\s,(.])(?:note)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/i);
+    const nCall = line.match(/(?:^|[\s,(.])(?:n)\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/i);
+    if (!noteCall && !nCall) return 0;
+
+    const targetSound = line.match(/\.s\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/i)?.[1] || "";
+    const explicitTrack = normalizeLiveTrackName(targetSound);
+    const track: TrackId = explicitTrack || (noteCall ? "SYNTH" : "SYNTH");
+
+    const rawTokens = miniNotationTokens((noteCall?.[1] || nCall?.[1] || ""));
+    const tokens = nCall ? rawTokens.map(scaleDegreeToNote) : rawTokens;
+
+    return applyLanePattern(nextPattern, nextLengths, nextEuclidean, track, tokens, false) ? 1 : 0;
+  }
+
+  function applyLiveCode() {
+    const lines = liveCode
+      .split("\n")
+      .map(liveStripComments)
+      .filter(Boolean)
+      .filter((line) => !/^\s*(stack|cat|slowcat|seq)\s*\(?\s*$/i.test(line))
+      .filter((line) => line !== ")" && line !== ")," && line !== "},");
+
+    const nextPattern = normalizePattern(patternRef.current).map((lane) => lane.map((step) => ({ ...step, locks: step.locks ? { ...step.locks } : undefined })));
+    const nextLengths = { ...trackLengthsRef.current };
+    const nextEuclidean = normalizeEuclidean(euclideanRef.current);
+    const clearedStrudelTracks = new Set<TrackId>();
+    let touched = 0;
+    let commandCount = 0;
+
+    lines.forEach((line) => {
+      const cpsMatch = line.match(/setcps\s*\(\s*([0-9.]+)\s*\)/i);
+      if (cpsMatch) {
+        const cps = Number(cpsMatch[1]);
+        if (Number.isFinite(cps)) {
+          setBpm(Math.max(80, Math.min(180, Math.round(cps * 240))));
+          commandCount += 1;
+        }
+        return;
+      }
+
+      if (/(?:^|[\s,(.])(?:s|sound)\s*\(/i.test(line)) {
+        const amount = applyStrudelSoundLine(line, nextPattern, nextLengths, nextEuclidean, clearedStrudelTracks);
+        touched += amount;
+        if (amount) commandCount += 1;
+        return;
+      }
+
+      if (/(?:^|[\s,(.])(?:note|n)\s*\(/i.test(line)) {
+        const amount = applyStrudelNoteLine(line, nextPattern, nextLengths, nextEuclidean);
+        touched += amount;
+        if (amount) commandCount += 1;
+        return;
+      }
+
+      const parts = line.split(/\s+/);
+      const command = parts[0]?.toLowerCase();
+      const rest = line.slice(parts[0]?.length || 0).trim();
+
+      if (!command) return;
+
+      if (command === "bpm" || command === "tempo") {
+        const value = Number(parts[1]);
+        if (Number.isFinite(value)) {
+          setBpm(Math.max(80, Math.min(180, value)));
+          commandCount += 1;
+        }
+        return;
+      }
+
+      if (command === "swing" || command === "groove") {
+        const value = Number(parts[1]);
+        if (Number.isFinite(value)) {
+          const nextGroove = Math.max(0, Math.min(100, value <= 1 ? value * 100 : value));
+          setKnobs((prev) => ({ ...prev, groove: nextGroove }));
+          commandCount += 1;
+        }
+        return;
+      }
+
+      if (command === "density") {
+        const value = Number(parts[1]);
+        if (Number.isFinite(value)) {
+          setKnobs((prev) => ({ ...prev, density: Math.max(0, Math.min(100, value)) }));
+          commandCount += 1;
+        }
+        return;
+      }
+
+      if (command === "chaos") {
+        const value = Number(parts[1]);
+        if (Number.isFinite(value)) {
+          setKnobs((prev) => ({ ...prev, chaos: Math.max(0, Math.min(100, value)) }));
+          commandCount += 1;
+        }
+        return;
+      }
+
+      if (command === "euclid" || command === "euclidean") {
+        const track = normalizeLiveTrackName(parts[1] || "");
+        const hits = Number(parts[2]);
+        const length = Number(parts[3] || steps);
+        const rotate = Number(parts[4] || 0);
+        if (track && isEuclideanTrack(track) && Number.isFinite(hits)) {
+          const row = tracks.indexOf(track);
+          const len = Math.max(1, Math.min(16, Number.isFinite(length) ? length : 16));
+          const euclid = euclideanPattern(len, hits, Number.isFinite(rotate) ? rotate : 0);
+          nextPattern[row] = Array.from({ length: steps }, (_, i) => makeStep(Boolean(euclid[i % len]), track, i));
+          nextLengths[track] = len;
+          nextEuclidean[track] = { enabled: false, hits: Math.max(0, Math.min(len, hits)), rotate: Number.isFinite(rotate) ? rotate : 0 };
+          touched += 1;
+          commandCount += 1;
+        }
+        return;
+      }
+
+      if (command === "melodark" || command === "dark" || command === "acid") {
+        setSynthMod((prev) => ({ ...prev, filterEnv: 72, fmAmount: command === "acid" ? 82 : 48, detune: command === "acid" ? 18 : 8, delaySend: 30, reverbSend: 34 }));
+        setBassPerformance((prev) => ({ ...prev, cutoff: command === "acid" ? 78 : 62, drive: command === "acid" ? 66 : 42, punch: 76, decay: 38 }));
+        commandCount += 1;
+        return;
+      }
+
+      const track = normalizeLiveTrackName(parts[0] || "");
+      if (!track) return;
+
+      const tokens = buildLivePatternTokens(rest);
+      if (!tokens.length) return;
+
+      if (applyLanePattern(nextPattern, nextLengths, nextEuclidean, track, tokens, false)) {
+        touched += 1;
+      }
+    });
+
+    setPattern(nextPattern);
+    setTrackLengths(nextLengths);
+    setEuclidean(nextEuclidean);
+    setLiveStatus(`RUN OK · ${touched} lanes · ${commandCount} commands · Strudel-ish`);
   }
 
   function clearLiveCode() {
     setLiveCode("");
-    setLiveStatus("PHASE LIVE cleared");
+    setLiveStatus("cleared");
   }
 
   function randomLiveCode() {
-    const next = LIVE_CODE_RANDOMS[Math.floor(Math.random() * LIVE_CODE_RANDOMS.length)] || LIVE_CODE_DEFAULT;
+    const templates = [
+      `// Strudel-ish 909 techno\nbpm 138\nswing 18\nstack(\n  s("bd ~ bd ~").struct("x...x...x...x...")\n  s("~ hh ~ hh").fast(2)\n  s("~ ~ cp ~").struct("....x.......x...")\n  note("D1 ~ F1 ~ A1 ~ C2 ~").s("bass")\n  note("D3:MIN7 ~ F3:SUS2 ~ A3:POWER ~ C4:MINOR ~").s("synth")\n)\neuclid percA 5 16 2\neuclid texture 2 16 9\nmelodark`,
+      `// Acid darker loop\nsetcps(.58)\ns("bd ~ bd ~").struct("x...x...x...x...")\ns("hh hh ~ hh").fast(2)\ns("~ ~ sd ~").struct("....x.......x...")\nn("0 2 3 5 7 5 3 2").scale("D:minor").s("synth")\nnote("D1 D1 ~ F1 ~ A1 ~ C2").s("bass")\neuclid percB 3 16 7\nacid`,
+      `// Hypnotic melodark\nbpm 136\ngroove 24\ns("bd ~ ~ ~").struct("x...x...x...x...")\ns("~ hh hh hh").fast(2)\neuclid percA 7 16 4\neuclid texture 2 16 5\nnote("D1 ~ F1 ~ G1 ~ A1 ~").s("bass")\nnote("D3:SUS2 ~ ~ ~ A3:MIN7 ~ ~ ~ F3:POWER ~ ~ ~ C4:SUS4 ~ ~ ~").s("synth")\ndark`,
+    ];
+    const next = templates[Math.floor(Math.random() * templates.length)] || templates[0];
     setLiveCode(next);
-    const result = parsePhaseLiveCode(next, patternRef.current, trackLengthsRef.current);
-
-    setPattern(result.pattern);
-    patternRef.current = result.pattern;
-
-    setTrackLengths(result.lengths);
-    trackLengthsRef.current = result.lengths;
-
-    if (typeof result.bpm === "number") setBpm(result.bpm);
-
-    if (Object.keys(result.knobs).length) {
-      setKnobs((prev) => ({ ...prev, ...result.knobs }));
-      knobsRef.current = { ...knobsRef.current, ...result.knobs };
-    }
-
-    setLiveStatus(result.status);
+    setLiveStatus("random Strudel-ish script loaded");
   }
+
+  const anySoloed = tracks.some((id) => solos[id]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -5390,154 +5449,130 @@ export default function Home() {
           display: none !important;
           opacity: 0 !important;
         }
-      `}
-        /* ── PHASE LIVE CODE ── */
+
+        /* ── PHASE LIVE CODE: tracker / live-coding layer ── */
         .ph-live-card {
-          margin-top: 8px;
-          border: 1px solid rgba(155,108,255,0.22);
+          margin-top: 10px !important;
+          border-color: rgba(155,108,255,0.22) !important;
           background:
-            linear-gradient(180deg, rgba(13,18,26,0.96), rgba(5,8,12,0.98)),
-            radial-gradient(circle at 12% 0%, rgba(155,108,255,0.20), transparent 42%);
-          box-shadow: 0 18px 60px rgba(0,0,0,0.36), inset 0 1px 0 rgba(255,255,255,0.055);
-          overflow: hidden;
+            radial-gradient(circle at 15% 0%, rgba(155,108,255,0.16), transparent 34%),
+            linear-gradient(180deg, rgba(9,15,22,0.96), rgba(3,7,11,0.96)) !important;
         }
         .ph-live-head {
-          display: grid;
-          grid-template-columns: 1fr auto;
-          gap: 10px;
-          align-items: center;
-          padding: 10px 12px;
-          border-bottom: 1px solid rgba(255,255,255,0.065);
-          background: linear-gradient(90deg, rgba(155,108,255,0.12), rgba(131,189,255,0.04), transparent);
+          display: flex !important;
+          align-items: center !important;
+          justify-content: space-between !important;
+          gap: 12px !important;
+          padding: 10px 12px 8px !important;
+          border-bottom: 1px solid rgba(255,255,255,0.07) !important;
         }
         .ph-live-title {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          font-family: 'Inter', system-ui, sans-serif;
-          font-size: 11px;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: .20em;
-          color: #f4efff;
+          display: flex !important;
+          align-items: baseline !important;
+          gap: 10px !important;
+          min-width: 0 !important;
         }
-        .ph-live-cursor {
-          width: 7px;
-          height: 14px;
-          border-radius: 2px;
-          background: #9b6cff;
-          box-shadow: 0 0 16px rgba(155,108,255,0.9);
-          animation: phBlink 1s steps(2, start) infinite;
+        .ph-live-title strong {
+          color: #f4efff !important;
+          font-size: 13px !important;
+          letter-spacing: .22em !important;
+          text-transform: uppercase !important;
+          font-family: 'Inter', system-ui, sans-serif !important;
         }
-        @keyframes phBlink { 50% { opacity: .18; } }
-        .ph-live-sub {
-          margin-top: 4px;
-          font-size: 9px;
-          color: #788292;
-          letter-spacing: .10em;
-          text-transform: uppercase;
+        .ph-live-title span {
+          color: #7f8796 !important;
+          font-size: 9px !important;
+          letter-spacing: .16em !important;
+          text-transform: uppercase !important;
         }
         .ph-live-actions {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-wrap: wrap;
-          justify-content: flex-end;
+          display: flex !important;
+          align-items: center !important;
+          gap: 6px !important;
+          flex-wrap: wrap !important;
+          justify-content: flex-end !important;
         }
-        .ph-live-run, .ph-live-secondary {
-          height: 28px;
-          border: 1px solid rgba(255,255,255,0.09);
-          border-radius: 8px;
-          padding: 0 10px;
-          cursor: pointer;
-          color: #f5f7fb;
-          font-family: 'DM Mono', monospace;
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: .12em;
-          transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
+        .ph-live-run,
+        .ph-live-btn {
+          height: 28px !important;
+          border-radius: 8px !important;
+          border: 1px solid rgba(255,255,255,0.10) !important;
+          cursor: pointer !important;
+          font-size: 10px !important;
+          font-weight: 800 !important;
+          letter-spacing: .16em !important;
+          text-transform: uppercase !important;
+          color: #f2f5ff !important;
+          padding: 0 10px !important;
+          font-family: 'DM Mono', monospace !important;
         }
         .ph-live-run {
-          border-color: rgba(155,108,255,0.62);
-          background: linear-gradient(180deg, rgba(155,108,255,0.38), rgba(82,53,170,0.82));
-          box-shadow: 0 0 24px rgba(155,108,255,0.20), inset 0 1px 0 rgba(255,255,255,0.14);
+          background: linear-gradient(180deg, #a882ff, #6f45dc) !important;
+          border-color: rgba(204,184,255,0.75) !important;
+          box-shadow: 0 0 22px rgba(155,108,255,0.34) !important;
         }
-        .ph-live-secondary {
-          background: rgba(255,255,255,0.045);
-        }
-        .ph-live-run:hover, .ph-live-secondary:hover {
-          transform: translateY(-1px);
-          border-color: rgba(205,187,255,0.72);
-          box-shadow: 0 0 22px rgba(155,108,255,0.22);
-        }
+        .ph-live-btn { background: rgba(255,255,255,0.045) !important; }
         .ph-live-body {
-          display: grid;
-          grid-template-columns: minmax(0, 1fr) 260px;
-          gap: 10px;
-          padding: 10px;
+          display: grid !important;
+          grid-template-columns: 1fr 250px !important;
+          gap: 10px !important;
+          padding: 10px !important;
         }
-        .ph-live-editor-wrap {
-          position: relative;
-          min-width: 0;
-          border: 1px solid rgba(255,255,255,0.065);
-          border-radius: 10px;
+        .ph-live-code {
+          width: 100% !important;
+          min-height: 172px !important;
+          resize: vertical !important;
+          border-radius: 10px !important;
+          border: 1px solid rgba(155,108,255,0.22) !important;
           background:
-            linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px) 0 0 / 16px 16px,
-            linear-gradient(180deg, rgba(255,255,255,0.022) 1px, transparent 1px) 0 0 / 16px 16px,
-            rgba(0,0,0,0.26);
-          overflow: hidden;
+            linear-gradient(90deg, rgba(155,108,255,0.055) 0 1px, transparent 1px 100%),
+            rgba(0,0,0,0.36) !important;
+          background-size: 12px 100% !important;
+          color: #d9fff3 !important;
+          caret-color: #efe36b !important;
+          padding: 12px 14px !important;
+          outline: none !important;
+          font-size: 12px !important;
+          line-height: 1.55 !important;
+          letter-spacing: .04em !important;
+          font-family: 'DM Mono', 'Fira Mono', monospace !important;
+          box-shadow: inset 0 0 28px rgba(0,0,0,0.42) !important;
         }
-        .ph-live-editor {
-          width: 100%;
-          min-height: 190px;
-          resize: vertical;
-          outline: none;
-          border: 0;
-          padding: 12px 13px;
-          background: transparent;
-          color: #dfffe9;
-          caret-color: #efe36b;
-          font-family: 'DM Mono', 'Fira Mono', monospace;
-          font-size: 12px;
-          line-height: 1.55;
-          tab-size: 2;
+        .ph-live-code:focus {
+          border-color: rgba(239,227,107,0.5) !important;
+          box-shadow: 0 0 0 1px rgba(239,227,107,0.10), inset 0 0 28px rgba(0,0,0,0.42) !important;
         }
-        .ph-live-editor::placeholder { color: rgba(223,255,233,0.34); }
-        .ph-live-panel {
-          min-width: 0;
-          border: 1px solid rgba(255,255,255,0.065);
-          border-radius: 10px;
-          padding: 10px;
-          background: rgba(255,255,255,0.035);
+        .ph-live-side {
+          border-radius: 10px !important;
+          border: 1px solid rgba(255,255,255,0.07) !important;
+          background: rgba(255,255,255,0.025) !important;
+          padding: 10px !important;
+          color: #97a2b4 !important;
+          font-size: 10px !important;
+          line-height: 1.55 !important;
+          min-width: 0 !important;
         }
         .ph-live-status {
-          margin-bottom: 9px;
-          color: #cdbbff;
-          font-size: 10px;
-          line-height: 1.35;
-          letter-spacing: .06em;
-        }
-        .ph-live-help {
-          display: grid;
-          gap: 6px;
-          color: #9aa4b4;
-          font-size: 9px;
-          line-height: 1.35;
+          color: #efe36b !important;
+          font-size: 10px !important;
+          letter-spacing: .14em !important;
+          text-transform: uppercase !important;
+          margin-bottom: 8px !important;
         }
         .ph-live-help code {
-          color: #efe36b;
-          background: rgba(0,0,0,0.28);
-          border: 1px solid rgba(255,255,255,0.055);
-          border-radius: 5px;
-          padding: 1px 5px;
+          color: #91efba !important;
+          background: rgba(145,239,186,0.08) !important;
+          border: 1px solid rgba(145,239,186,0.11) !important;
+          padding: 1px 4px !important;
+          border-radius: 4px !important;
         }
-        @media (max-width: 920px) {
-          .ph-live-body { grid-template-columns: 1fr; }
-          .ph-live-head { grid-template-columns: 1fr; }
-          .ph-live-actions { justify-content: flex-start; }
+        @media (max-width: 980px) {
+          .ph-live-body { grid-template-columns: 1fr !important; }
+          .ph-live-head { align-items: flex-start !important; flex-direction: column !important; }
+          .ph-live-actions { justify-content: flex-start !important; }
         }
 
-        </style>
+      `}</style>
 
       <input ref={fileInputRef} type="file" accept="audio/*" style={{ display: "none" }} onChange={handleFileChange} />
 
@@ -5593,36 +5628,41 @@ export default function Home() {
         {/* ── PHASE LIVE CODE ── */}
         <section className="ph-card ph-live-card">
           <div className="ph-live-head">
-            <div>
-              <div className="ph-live-title"><span className="ph-live-cursor" /> PHASE LIVE CODE</div>
-              <div className="ph-live-sub">tracker syntax · code to matrix · techno performance layer</div>
+            <div className="ph-live-title">
+              <strong>PHASE LIVE CODE</strong>
+              <span>tracker syntax · code to grid · techno generator</span>
             </div>
             <div className="ph-live-actions">
-              <button className="ph-live-run" onClick={runLiveCode}>Run</button>
-              <button className="ph-live-secondary" onClick={randomLiveCode}>Random</button>
-              <button className="ph-live-secondary" onClick={clearLiveCode}>Clear</button>
+              <button className="ph-live-run" onClick={applyLiveCode}>RUN</button>
+              <button className="ph-live-btn" onClick={randomLiveCode}>RANDOM</button>
+              <button className="ph-live-btn" onClick={clearLiveCode}>CLEAR</button>
             </div>
           </div>
           <div className="ph-live-body">
-            <div className="ph-live-editor-wrap">
-              <textarea
-                className="ph-live-editor"
-                value={liveCode}
-                onChange={(e) => setLiveCode(e.target.value)}
-                spellCheck={false}
-                placeholder="kick x...x...x...x...&#10;hat .x.x.x.x.x.x.x.x&#10;bass D1 ~ F1 ~ A1 ~ C2 ~"
-              />
-            </div>
-            <aside className="ph-live-panel">
+            <textarea
+              className="ph-live-code"
+              spellCheck={false}
+              value={liveCode}
+              onChange={(e) => setLiveCode(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  applyLiveCode();
+                }
+              }}
+            />
+            <div className="ph-live-side">
               <div className="ph-live-status">{liveStatus}</div>
               <div className="ph-live-help">
-                <span><code>x</code> active step · <code>.</code>/<code>~</code> rest</span>
-                <span><code>bpm 140</code> · <code>swing 48</code> · <code>chaos 30</code></span>
-                <span><code>hat euclid 7 16 1</code> generates Euclidean rhythm</span>
-                <span><code>bass D1 ~ F1 ~ A1 ~</code> writes notes into the bass lane</span>
-                <span><code>synth A3:min7</code> · <code>F3:sus2</code> · <code>G3:power</code></span>
+                <div><code>kick x...x...</code></div>
+                <div><code>hat .x.x.x</code></div>
+                <div><code>bass D1 . F1 .</code></div>
+                <div><code>synth D3:MIN7 . F3:SUS2</code></div>
+                <div><code>euclid percA 5 16 2</code></div>
+                <div><code>bpm 138</code> · <code>swing 18</code> · <code>acid</code></div>
+                <div style={{ marginTop: 8, color: "#697386" }}>Shortcut: Cmd/Ctrl + Enter = RUN</div>
               </div>
-            </aside>
+            </div>
           </div>
         </section>
 
