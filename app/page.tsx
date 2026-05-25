@@ -230,46 +230,46 @@ const SCALE_INTERVALS: Record<ScaleName, number[]> = {
 };
 
 const DEFAULT_RHYTHM: RhythmEngine = {
-  density: 40,
-  groove: 20,
+  density: 46,
+  groove: 10,
   swing: 0,
   probability: 100,
   repeat: 0,
-  chaos: 6,
+  chaos: 2,
 };
 
 const DEFAULT_BASS: BassEngine = {
   root: "D",
-  motion: 30,
-  acid: 35,
-  drive: 25,
-  mutation: 10,
-  energy: 60,
+  motion: 22,
+  acid: 42,
+  drive: 34,
+  mutation: 6,
+  energy: 72,
 };
 
 const DEFAULT_SYNTH: SynthEngine = {
-  scale: "dorian",
+  scale: "phrygian",
   mood: "noir",
-  tension: 20,
-  movement: 20,
-  space: 20,
-  brightness: 25,
+  tension: 14,
+  movement: 12,
+  space: 12,
+  brightness: 16,
 };
 
 const DEFAULT_TEXTURE: TextureEngine = {
-  drone: 8,
+  drone: 3,
   noise: 0,
-  metallic: 5,
-  motion: 10,
-  width: 35,
-  darkness: 75,
+  metallic: 0,
+  motion: 6,
+  width: 18,
+  darkness: 88,
 };
 
 const DEFAULT_FX: FxEngine = {
-  delay: 10,
-  reverb: 12,
-  distortion: 5,
-  feedback: 8,
+  delay: 5,
+  reverb: 6,
+  distortion: 8,
+  feedback: 4,
   freeze: 0,
   glitch: 0,
 };
@@ -286,7 +286,7 @@ const SAMPLE_TRACKS = ["KICK", "HAT", "PERC"] as const;
 type SampleTrack = (typeof SAMPLE_TRACKS)[number];
 const PRESET_STORAGE_KEY = "phase.presets.v3";
 const DEFAULT_LENGTHS: Record<TrackId, number> = { KICK: 16, HAT: 16, PERC: 16, BASS: 16, SYNTH: 16 };
-const DEFAULT_VOLUMES: Record<TrackId, number> = { KICK: -2, HAT: -10, PERC: -8, BASS: -4, SYNTH: -10 };
+const DEFAULT_VOLUMES: Record<TrackId, number> = { KICK: 0, HAT: -14, PERC: -16, BASS: -5, SYNTH: -17 };
 const DEFAULT_BOOLEAN_TRACKS: Record<TrackId, boolean> = { KICK: false, HAT: false, PERC: false, BASS: false, SYNTH: false };
 const DEFAULT_EUCLIDEAN: Record<TrackId, EuclideanLane> = {
   KICK: { enabled: false, hits: 4, rotate: 0 },
@@ -368,20 +368,21 @@ function createPattern(rhythm = DEFAULT_RHYTHM, bass = DEFAULT_BASS, synth = DEF
   const pattern: Record<TrackId, Step[]> = {
     KICK: Array.from({ length: STEPS }, (_, i) => makeStep(i % 4 === 0, "KICK", i)),
     HAT: Array.from({ length: STEPS }, (_, i) => makeStep(i % 4 === 2, "HAT", i)),
-    PERC: Array.from({ length: STEPS }, (_, i) => makeStep([3, 6, 10, 14].includes(i), "PERC", i)),
+    PERC: Array.from({ length: STEPS }, (_, i) => makeStep([5, 13].includes(i), "PERC", i)),
     BASS: Array.from({ length: STEPS }, (_, i) => {
-      const strong = [0, 6, 10].includes(i);
-      const support = bass.motion > 48 && [7, 15].includes(i) && random() < mapRange(bass.motion, 48, 100, 0.08, 0.38);
+      const strong = [0, 6, 10, 14].includes(i);
+      const support = bass.motion > 54 && [3, 15].includes(i) && random() < mapRange(bass.motion, 54, 100, 0.04, 0.24);
       const step = makeStep(strong || support, "BASS", i);
-      step.note = scaleNote(bass.root, synth.scale, strong ? 0 : 2 + Math.round(bass.mutation / 35), 1);
-      step.velocity = strong ? 92 : 70;
-      step.repeat = bass.acid > 70 && random() < 0.2 ? 2 : 1;
+      step.note = scaleNote(bass.root, synth.scale, strong && i === 10 ? 1 : 0, 1);
+      step.velocity = strong ? (i === 0 ? 106 : 92) : 68;
+      step.repeat = bass.acid > 76 && random() < 0.16 ? 2 : 1;
       return step;
     }),
     SYNTH: Array.from({ length: STEPS }, (_, i) => {
-      const active = [4, 12].includes(i) || (synth.movement > 68 && i % 8 === 0) || (synth.movement > 48 && random() < mapRange(synth.movement, 48, 100, 0.02, 0.1));
+      const active = [6, 14].includes(i) || (synth.movement > 72 && i % 8 === 4) || (synth.movement > 52 && random() < mapRange(synth.movement, 52, 100, 0.01, 0.07));
       const step = makeStep(active, "SYNTH", i);
-      step.note = scaleNote(bass.root, synth.scale, i + Math.round(synth.tension / 28), 3);
+      step.note = scaleNote(bass.root, synth.scale, i === 14 ? 4 : 2, 3);
+      step.velocity = 72;
       step.probability = Math.round(mapRange(rhythm.probability, 0, 100, 48, 100));
       return step;
     }),
@@ -427,6 +428,7 @@ export default function Home() {
   const sequenceRef = useRef<Tone.Sequence<number> | null>(null);
   const strudelSchedulerRef = useRef<StrudelScheduler | null>(null);
   const strudelModulesRef = useRef<StrudelModules | null>(null);
+  const transportRunningRef = useRef(false);
   const patternRef = useRef(pattern);
   const rhythmRef = useRef(rhythm);
   const bassRef = useRef(bass);
@@ -566,10 +568,10 @@ export default function Home() {
   function ensureRig() {
     if (rigRef.current) return rigRef.current;
 
-    const volume = new Tone.Volume(-5).toDestination();
-    const drive = new Tone.Distortion({ distortion: 0.025, wet: 0.03 });
-    const delay = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.08, wet: 0.04 });
-    const reverb = new Tone.Reverb({ decay: 1.8, wet: 0.05 });
+    const volume = new Tone.Volume(-4).toDestination();
+    const drive = new Tone.Distortion({ distortion: 0.035, wet: 0.025 });
+    const delay = new Tone.FeedbackDelay({ delayTime: "8n.", feedback: 0.035, wet: 0.015 });
+    const reverb = new Tone.Reverb({ decay: 1.25, wet: 0.025 });
     drive.connect(delay);
     delay.connect(reverb);
     reverb.connect(volume);
@@ -584,46 +586,46 @@ export default function Home() {
     };
 
     const kick = new Tone.MembraneSynth({
-      pitchDecay: 0.026,
-      octaves: 8.5,
+      pitchDecay: 0.013,
+      octaves: 9.5,
       oscillator: { type: "sine" },
-      envelope: { attack: 0.001, decay: 0.34, sustain: 0, release: 0.025 },
+      envelope: { attack: 0.001, decay: 0.19, sustain: 0, release: 0.018 },
     }).connect(trackVolumes.KICK);
 
-    const hatFilter = new Tone.Filter({ type: "highpass", frequency: 7800, Q: 0.18 }).connect(trackVolumes.HAT);
+    const hatFilter = new Tone.Filter({ type: "highpass", frequency: 7200, Q: 0.28 }).connect(trackVolumes.HAT);
     const hat = new Tone.NoiseSynth({
-      noise: { type: "brown" },
-      envelope: { attack: 0.001, decay: 0.035, sustain: 0, release: 0.012 },
+      noise: { type: "white" },
+      envelope: { attack: 0.001, decay: 0.026, sustain: 0, release: 0.008 },
     }).connect(hatFilter);
 
-    const percFilter = new Tone.Filter({ type: "bandpass", frequency: 980, Q: 3.2 }).connect(trackVolumes.PERC);
+    const percFilter = new Tone.Filter({ type: "bandpass", frequency: 720, Q: 5.2 }).connect(trackVolumes.PERC);
     const perc = new Tone.MembraneSynth({
-      pitchDecay: 0.004,
-      octaves: 1.8,
+      pitchDecay: 0.006,
+      octaves: 2.4,
       oscillator: { type: "triangle" },
-      envelope: { attack: 0.001, decay: 0.07, sustain: 0, release: 0.018 },
+      envelope: { attack: 0.001, decay: 0.052, sustain: 0, release: 0.012 },
     }).connect(percFilter);
 
-    const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 680, rolloff: -24, Q: 1.1 });
-    const bassDrive = new Tone.Distortion({ distortion: 0.1, wet: 0.14 });
+    const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 620, rolloff: -24, Q: 1.7 });
+    const bassDrive = new Tone.Distortion({ distortion: 0.16, wet: 0.22 });
     bassDrive.connect(bassFilter);
     bassFilter.connect(trackVolumes.BASS);
     const bassVoice = new Tone.MonoSynth({
       oscillator: { type: "sawtooth" },
-      envelope: { attack: 0.002, decay: 0.11, sustain: 0.12, release: 0.055 },
-      filter: { type: "lowpass", Q: 1.8, rolloff: -24 },
-      filterEnvelope: { attack: 0.002, decay: 0.11, sustain: 0.02, release: 0.055, baseFrequency: 55, octaves: 2.9 },
-      portamento: 0.012,
+      envelope: { attack: 0.001, decay: 0.075, sustain: 0.18, release: 0.04 },
+      filter: { type: "lowpass", Q: 2.4, rolloff: -24 },
+      filterEnvelope: { attack: 0.001, decay: 0.085, sustain: 0.03, release: 0.035, baseFrequency: 42, octaves: 2.35 },
+      portamento: 0.006,
     }).connect(bassDrive);
 
-    const synthFilter = new Tone.Filter({ type: "lowpass", frequency: 1450, rolloff: -24, Q: 0.45 }).connect(trackVolumes.SYNTH);
+    const synthFilter = new Tone.Filter({ type: "lowpass", frequency: 980, rolloff: -24, Q: 0.55 }).connect(trackVolumes.SYNTH);
     const synthVoice = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle" },
-      envelope: { attack: 0.024, decay: 0.28, sustain: 0.05, release: 0.38 },
+      envelope: { attack: 0.018, decay: 0.24, sustain: 0.035, release: 0.32 },
     }).connect(synthFilter);
 
     const textureGain = new Tone.Gain(0).connect(drive);
-    const textureFilter = new Tone.Filter({ type: "lowpass", frequency: 320, Q: 0.35, rolloff: -24 }).connect(textureGain);
+    const textureFilter = new Tone.Filter({ type: "lowpass", frequency: 140, Q: 0.25, rolloff: -24 }).connect(textureGain);
     const textureDrone = new Tone.Oscillator({ frequency: 55, type: "sine" }).connect(textureFilter).start();
     const textureNoise = new Tone.Noise({ type: "brown" }).connect(textureFilter).start();
 
@@ -662,11 +664,11 @@ export default function Home() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = bassRef.current;
-    rig.bassFilter.frequency.value = mapRange(next.energy, 0, 100, 220, 3200);
-    rig.bassFilter.Q.value = mapRange(next.acid, 0, 100, 0.7, 6.8);
-    rig.bassDrive.distortion = mapRange(next.drive, 0, 100, 0.02, 0.72);
-    rig.bassDrive.wet.value = mapRange(next.drive, 0, 100, 0.06, 0.62);
-    rig.bass.portamento = mapRange(next.acid + next.motion * 0.35, 0, 135, 0.002, 0.16);
+    rig.bassFilter.frequency.value = mapRange(next.energy, 0, 100, 160, 1850);
+    rig.bassFilter.Q.value = mapRange(next.acid, 0, 100, 0.9, 7.6);
+    rig.bassDrive.distortion = mapRange(next.drive, 0, 100, 0.04, 0.68);
+    rig.bassDrive.wet.value = mapRange(next.drive, 0, 100, 0.1, 0.55);
+    rig.bass.portamento = mapRange(next.acid + next.motion * 0.25, 0, 125, 0.001, 0.095);
   }
 
   function applySynthEngine() {
@@ -674,20 +676,20 @@ export default function Home() {
     if (!rig) return;
     const next = synthRef.current;
     const x = xyRef.current.x;
-    rig.synthFilter.frequency.value = mapRange(next.brightness * 0.7 + x * 100 * 0.7, 0, 140, 680, 9200);
-    rig.synthFilter.Q.value = mapRange(next.tension, 0, 100, 0.4, 3.8);
-    rig.trackVolumes.SYNTH.volume.value = mapRange(next.mood === "aerial" ? next.space : next.tension, 0, 100, -11, -4);
+    rig.synthFilter.frequency.value = mapRange(next.brightness * 0.7 + x * 100 * 0.5, 0, 120, 420, 5200);
+    rig.synthFilter.Q.value = mapRange(next.tension, 0, 100, 0.35, 2.4);
+    rig.trackVolumes.SYNTH.volume.value = mapRange(next.mood === "aerial" ? next.space : next.tension, 0, 100, -19, -9);
   }
 
   function applyTextureEngine() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = textureRef.current;
-    const freq = mapRange(100 - next.darkness + next.metallic * 0.25, 0, 125, 120, 1600);
+    const freq = mapRange(100 - next.darkness + next.metallic * 0.15, 0, 115, 65, 520);
     rig.textureFilter.frequency.value = freq;
-    rig.textureFilter.Q.value = mapRange(next.metallic, 0, 100, 0.18, 1.2);
-    rig.textureGain.gain.value = mapRange(next.drone * 0.45 + next.noise * 0.2, 0, 100, 0, 0.006);
-    rig.textureDrone.frequency.value = Tone.Frequency(`${bassRef.current.root}1`).toFrequency() * mapRange(next.motion, 0, 100, 0.45, 0.9);
+    rig.textureFilter.Q.value = mapRange(next.metallic, 0, 100, 0.18, 0.9);
+    rig.textureGain.gain.value = transportRunningRef.current ? mapRange(next.drone * 0.18 + next.noise * 0.08, 0, 100, 0, 0.0018) : 0;
+    rig.textureDrone.frequency.value = Tone.Frequency(`${bassRef.current.root}1`).toFrequency() * mapRange(next.motion, 0, 100, 0.36, 0.72);
     rig.textureNoise.type = "brown";
   }
 
@@ -695,12 +697,12 @@ export default function Home() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = fxRef.current;
-    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.48);
-    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.08, 0.86);
-    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.6, 0, 160, 0.02, 0.72);
-    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 1.1, 12);
-    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.01, 0.58);
-    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.04, 0.46);
+    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.24);
+    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.025, 0.58);
+    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.45, 0, 145, 0.01, 0.38);
+    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 0.7, 6.5);
+    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.015, 0.42);
+    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.02, 0.28);
   }
 
   function restoreRunningFxAndTexture() {
@@ -709,21 +711,21 @@ export default function Home() {
 
     const nextFx = fxRef.current;
     const nextTexture = textureRef.current;
-    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.08, 0.86);
-    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.48);
-    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.6, 0, 160, 0.02, 0.72);
-    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.04, 0.46);
-    rig.textureGain.gain.value = mapRange(nextTexture.drone * 0.45 + nextTexture.noise * 0.2, 0, 100, 0, 0.006);
+    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.025, 0.58);
+    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.24);
+    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.45, 0, 145, 0.01, 0.38);
+    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.02, 0.28);
+    rig.textureGain.gain.value = transportRunningRef.current ? mapRange(nextTexture.drone * 0.18 + nextTexture.noise * 0.08, 0, 100, 0, 0.0018) : 0;
   }
 
   function applyXY(x: number, y: number) {
     const rig = rigRef.current;
     if (!rig) return;
-    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 520, 9800);
-    rig.hatFilter.frequency.value = mapRange(x, 0, 1, 4200, 11200);
-    rig.textureFilter.frequency.value = mapRange(x, 0, 1, 120, 900);
-    rig.delay.wet.value = mapRange(y, 0, 1, 0.02, 0.56);
-    rig.reverb.wet.value = mapRange(y, 0, 1, 0.04, 0.72);
+    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 420, 5600);
+    rig.hatFilter.frequency.value = mapRange(x, 0, 1, 5600, 9800);
+    rig.textureFilter.frequency.value = mapRange(x, 0, 1, 70, 520);
+    rig.delay.wet.value = mapRange(y, 0, 1, 0.003, 0.18);
+    rig.reverb.wet.value = mapRange(y, 0, 1, 0.006, 0.24);
   }
 
   function rewriteMelodicNotes(track: "BASS" | "SYNTH") {
@@ -731,7 +733,9 @@ export default function Home() {
       ...prev,
       [track]: prev[track].map((step, index) => ({
         ...step,
-        note: scaleNote(bassRef.current.root, synthRef.current.scale, index + (track === "SYNTH" ? Math.round(synthRef.current.tension / 24) : Math.round(bassRef.current.mutation / 32)), track === "BASS" ? 1 : 3),
+        note: track === "BASS"
+          ? scaleNote(bassRef.current.root, synthRef.current.scale, index === 10 ? 1 : 0, 1)
+          : scaleNote(bassRef.current.root, synthRef.current.scale, index === 14 ? 4 : 2 + Math.round(synthRef.current.tension / 48), 3),
       })),
     }));
   }
@@ -764,20 +768,20 @@ export default function Home() {
           continue;
         } catch {}
       }
-      if (track === "KICK") rig.kick.triggerAttackRelease("C1", "16n", t, velocity * 0.95);
-      if (track === "HAT") rig.hat.triggerAttackRelease("64n", t, velocity * 0.42);
+      if (track === "KICK") rig.kick.triggerAttackRelease("C1", "32n", t, velocity * 1.08);
+      if (track === "HAT") rig.hat.triggerAttackRelease("64n", t, velocity * 0.34);
       if (track === "PERC") {
-        const notes = ["C2", "F2", "G2", "A#2"];
-        rig.perc.triggerAttackRelease(notes[index % notes.length], "64n", t, velocity * 0.58);
+        const notes = ["A#1", "C2", "D#2", "F2"];
+        rig.perc.triggerAttackRelease(notes[index % notes.length], "64n", t, velocity * 0.46);
       }
       if (track === "BASS") {
-        const gate = bassRef.current.acid > 64 ? "32n" : bassRef.current.energy > 66 ? "8n" : "16n";
-        rig.bass.triggerAttackRelease(step.note || `${bassRef.current.root}1`, gate, t, velocity * 0.86);
+        const gate = bassRef.current.acid > 64 ? "32n" : bassRef.current.energy > 66 ? "16n" : "32n";
+        rig.bass.triggerAttackRelease(step.note || `${bassRef.current.root}1`, gate, t, velocity * 0.98);
       }
       if (track === "SYNTH") {
         const root = step.note || scaleNote(bassRef.current.root, synthRef.current.scale, index, 3);
         const chord = synthRef.current.tension > 72 ? [root, Tone.Frequency(root).transpose(3).toNote(), Tone.Frequency(root).transpose(10).toNote()] : [root, Tone.Frequency(root).transpose(7).toNote()];
-        rig.synth.triggerAttackRelease(chord, synthRef.current.space > 68 ? "8n" : "16n", t, velocity * 0.34);
+        rig.synth.triggerAttackRelease(chord, synthRef.current.space > 68 ? "8n" : "16n", t, velocity * 0.22);
       }
     }
   }
@@ -843,13 +847,14 @@ export default function Home() {
       const N = strudel.note;
       const Stack = strudel.stack;
       repl.scheduler.setPattern(Stack(
-        S(strudelMiniFor("KICK")).gain(0.92).distort(mapRange(fxRef.current.distortion, 0, 100, 0, 0.7)),
-        S(strudelMiniFor("HAT")).gain(0.34).hpf(mapRange(xyRef.current.x, 0, 1, 3000, 9000)),
-        S(strudelMiniFor("PERC")).gain(0.38).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.7)),
-        N(strudelMiniFor("BASS")).s("sawtooth").gain(0.48).lpf(mapRange(bassRef.current.energy, 0, 100, 260, 3600)).lpq(mapRange(bassRef.current.acid, 0, 100, 2, 14)),
-        N(strudelMiniFor("SYNTH")).s("sawtooth").gain(0.24).room(mapRange(synthRef.current.space, 0, 100, 0.05, 0.76)).delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.5))
+        S(strudelMiniFor("KICK")).gain(1.02).distort(mapRange(fxRef.current.distortion, 0, 100, 0.03, 0.42)),
+        S(strudelMiniFor("HAT")).gain(0.22).hpf(mapRange(xyRef.current.x, 0, 1, 5200, 9800)),
+        S(strudelMiniFor("PERC")).gain(0.24).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.34)),
+        N(strudelMiniFor("BASS")).s("sawtooth").gain(0.62).lpf(mapRange(bassRef.current.energy, 0, 100, 180, 1900)).lpq(mapRange(bassRef.current.acid, 0, 100, 2, 12)),
+        N(strudelMiniFor("SYNTH")).s("triangle").gain(0.15).room(mapRange(synthRef.current.space, 0, 100, 0.02, 0.34)).delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.24))
       ));
       repl.scheduler.start();
+      transportRunningRef.current = true;
       setPlaying(true);
       setStatus("Strudel engine playing");
     } catch (error) {
@@ -882,6 +887,7 @@ export default function Home() {
       toneContextState: Tone.context.state,
     });
     ensureRig();
+    transportRunningRef.current = true;
     restoreRunningFxAndTexture();
     applyTransport();
     Tone.Transport.stop();
@@ -901,12 +907,15 @@ export default function Home() {
     }, Array.from({ length: STEPS }, (_, i) => i), "16n");
     sequenceRef.current.start(0);
     Tone.Transport.start("+0.04");
+    applyTextureEngine();
+    applyFxEngine();
     setPlaying(true);
     setStatus("Tone scheduler locked");
   }
 
   function stopTone() {
     const now = Tone.now();
+    transportRunningRef.current = false;
 
     try { strudelSchedulerRef.current?.stop(); } catch {}
     try { Tone.Transport.stop(); } catch {}
@@ -1328,6 +1337,10 @@ export default function Home() {
     <main className="phase-shell">
       <style>{`
         .engine-card {
+          min-width: 0;
+          padding: 18px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
           background:
             linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
             radial-gradient(circle at 50% -18%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 48%),
@@ -1338,23 +1351,39 @@ export default function Home() {
             0 14px 34px rgba(0, 0, 0, 0.3);
         }
 
+        .engine-card h2 {
+          margin: 0 0 15px;
+          color: #edf8ff;
+          font-size: 13px;
+          line-height: 1.1;
+          text-transform: uppercase;
+          letter-spacing: 0.16em;
+        }
+
+        .engine-bank {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(280px, 1fr));
+          gap: 18px;
+          align-items: stretch;
+        }
+
         .engine-card .engine-controls {
           display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 12px;
+          grid-template-columns: repeat(3, minmax(108px, 1fr));
+          gap: 14px;
           align-items: stretch;
         }
 
         .rotary-knob {
           position: relative;
           min-width: 0;
-          min-height: 152px;
+          min-height: 174px;
           display: grid;
           grid-template-rows: auto 1fr auto;
-          gap: 7px;
+          gap: 9px;
           justify-items: center;
           align-items: center;
-          padding: 12px 10px 10px;
+          padding: 14px 12px 12px;
           border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 7px;
           background:
@@ -1417,17 +1446,17 @@ export default function Home() {
         .rotary-label {
           width: 100%;
           color: rgba(237, 248, 255, 0.72);
-          font-size: 10px;
+          font-size: 11px;
           line-height: 1.2;
           text-transform: uppercase;
-          letter-spacing: 0.12em;
+          letter-spacing: 0.08em;
           text-align: center;
           white-space: normal;
           overflow-wrap: anywhere;
         }
 
         .rotary-face {
-          width: min(92px, 100%);
+          width: min(112px, 100%);
           aspect-ratio: 1;
           filter: drop-shadow(0 0 12px color-mix(in srgb, var(--accent) 20%, transparent));
         }
@@ -1481,12 +1510,143 @@ export default function Home() {
         }
 
         .engine-card .macro-select {
-          min-height: 72px;
+          min-height: 88px;
+          padding: 12px;
+          display: grid;
+          gap: 8px;
           align-content: center;
+          grid-column: span 1;
           border-radius: 7px;
           background:
             linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.018)),
             rgba(0, 0, 0, 0.26);
+        }
+
+        .engine-card .macro-select span {
+          color: rgba(237, 248, 255, 0.68);
+          font-size: 11px;
+          line-height: 1.2;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+
+        .engine-card .macro-select select {
+          min-width: 0;
+          width: 100%;
+          height: 34px;
+          border-radius: 6px;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          color: #edf8ff;
+          background: rgba(0, 0, 0, 0.42);
+          font: inherit;
+          font-size: 13px;
+        }
+
+        .engine-card.bass-engine .macro-select {
+          grid-column: 1 / -1;
+        }
+
+        .engine-card.synth-engine .macro-select {
+          grid-column: span 1;
+        }
+
+        .master-card .engine-controls {
+          grid-template-columns: minmax(128px, 1fr) minmax(128px, 1fr);
+        }
+
+        .master-readout,
+        .master-action,
+        .master-status {
+          min-height: 174px;
+          display: grid;
+          align-content: center;
+          justify-items: center;
+          gap: 12px;
+          padding: 16px 12px;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 7px;
+          background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018)),
+            radial-gradient(circle at 50% -20%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 58%),
+            rgba(0, 0, 0, 0.3);
+        }
+
+        .master-readout {
+          grid-column: span 1;
+        }
+
+        .master-status {
+          grid-column: 1 / -1;
+        }
+
+        .master-readout span,
+        .master-action span,
+        .master-status span {
+          color: rgba(237, 248, 255, 0.68);
+          font-size: 11px;
+          line-height: 1.2;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          text-align: center;
+        }
+
+        .master-readout b,
+        .master-status b {
+          color: #edf8ff;
+          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+          font-size: 25px;
+          line-height: 1;
+          text-shadow: 0 0 16px color-mix(in srgb, var(--accent) 34%, transparent);
+        }
+
+        .master-status b {
+          font-size: 18px;
+        }
+
+        .master-action button {
+          width: min(152px, 100%);
+          min-height: 54px;
+          border: 1px solid rgba(255, 79, 145, 0.54);
+          border-radius: 7px;
+          color: #fff;
+          background:
+            linear-gradient(180deg, rgba(255, 79, 145, 0.32), rgba(255, 79, 145, 0.12)),
+            rgba(0, 0, 0, 0.36);
+          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+          font-size: 13px;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          cursor: pointer;
+          box-shadow: 0 0 18px rgba(255, 79, 145, 0.16);
+        }
+
+        .phase-status-card {
+          grid-column: 1 / -1;
+          min-height: 74px;
+          display: grid;
+          grid-template-columns: auto 1fr auto;
+          gap: 14px;
+          align-items: center;
+          padding: 15px 18px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 8px;
+          color: rgba(237, 248, 255, 0.72);
+          background: rgba(4, 5, 12, 0.68);
+        }
+
+        .phase-status-card button {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 38px;
+          padding: 0 14px;
+          border: 1px solid rgba(255, 255, 255, 0.13);
+          border-radius: 7px;
+          color: #edf8ff;
+          background: rgba(255, 255, 255, 0.045);
+          font: inherit;
+          font-size: 12px;
+          cursor: pointer;
         }
 
         .phase-version {
@@ -1503,23 +1663,69 @@ export default function Home() {
         }
 
         @media (max-width: 1180px) {
+          .engine-bank {
+            grid-template-columns: repeat(2, minmax(280px, 1fr));
+          }
+        }
+
+        @media (max-width: 900px) {
+          .engine-card {
+            padding: 16px;
+          }
+
           .engine-card .engine-controls {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(116px, 1fr));
+          }
+
+          .engine-card.synth-engine .macro-select {
+            grid-column: span 1;
+          }
+
+          .master-card .engine-controls {
+            grid-template-columns: repeat(2, minmax(116px, 1fr));
           }
         }
 
         @media (max-width: 760px) {
+          .engine-bank {
+            grid-template-columns: 1fr;
+          }
+
           .engine-card .engine-controls {
-            grid-template-columns: repeat(2, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(124px, 1fr));
           }
 
           .rotary-knob {
-            min-height: 142px;
-            padding: 11px 8px 10px;
+            min-height: 164px;
+            padding: 13px 10px 11px;
           }
 
           .rotary-face {
-            width: min(86px, 100%);
+            width: min(100px, 100%);
+          }
+
+          .phase-status-card {
+            grid-template-columns: auto 1fr;
+          }
+
+          .phase-status-card button {
+            grid-column: 1 / -1;
+            justify-content: center;
+            width: 100%;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .engine-card .engine-controls,
+          .master-card .engine-controls {
+            grid-template-columns: 1fr;
+          }
+
+          .master-readout,
+          .master-action,
+          .master-status {
+            grid-column: 1 / -1;
+            min-height: 132px;
           }
         }
       `}</style>
@@ -1530,7 +1736,7 @@ export default function Home() {
             <div>
               <h1>PHASE TEST 999</h1>
               <p>Hybrid generative techno instrument</p>
-              <span className="phase-version">PHASE CODEX v0.6</span>
+              <span className="phase-version">PHASE SOUND PRO v0.9</span>
             </div>
           </div>
 
@@ -1727,40 +1933,55 @@ export default function Home() {
             <RotaryKnob label="Swing" value={rhythm.swing} onChange={(value) => updateEngine(setRhythm, "swing", value)} />
           </EngineCard>
 
-          <EngineCard title="Bass Engine" accent="#ff4f91">
+          <EngineCard title="Bass Engine" accent="#ff4f91" className="bass-engine">
             <Select label="Root" value={bass.root} values={NOTE_NAMES} onChange={(value) => updateEngine(setBass, "root", value as RootNote)} />
             <RotaryKnob label="Motion" value={bass.motion} onChange={(value) => updateEngine(setBass, "motion", value)} />
             <RotaryKnob label="Acid" value={bass.acid} onChange={(value) => updateEngine(setBass, "acid", value)} />
             <RotaryKnob label="Drive" value={bass.drive} onChange={(value) => updateEngine(setBass, "drive", value)} />
-            <RotaryKnob label="Mutation" value={bass.mutation} onChange={(value) => updateEngine(setBass, "mutation", value)} />
+            <RotaryKnob label="Mutate" value={bass.mutation} onChange={(value) => updateEngine(setBass, "mutation", value)} />
             <RotaryKnob label="Energy" value={bass.energy} onChange={(value) => updateEngine(setBass, "energy", value)} />
           </EngineCard>
 
-          <EngineCard title="Synth Engine" accent="#78ffe5">
+          <EngineCard title="Synth Engine" accent="#78ffe5" className="synth-engine">
             <Select label="Scale" value={synth.scale} values={Object.keys(SCALE_INTERVALS)} onChange={(value) => updateEngine(setSynth, "scale", value as ScaleName)} />
             <Select label="Mood" value={synth.mood} values={["noir", "hypnotic", "acid", "ritual", "aerial"]} onChange={(value) => updateEngine(setSynth, "mood", value as MoodName)} />
             <RotaryKnob label="Tension" value={synth.tension} onChange={(value) => updateEngine(setSynth, "tension", value)} />
-            <RotaryKnob label="Movement" value={synth.movement} onChange={(value) => updateEngine(setSynth, "movement", value)} />
+            <RotaryKnob label="Move" value={synth.movement} onChange={(value) => updateEngine(setSynth, "movement", value)} />
             <RotaryKnob label="Space" value={synth.space} onChange={(value) => updateEngine(setSynth, "space", value)} />
-            <RotaryKnob label="Brightness" value={synth.brightness} onChange={(value) => updateEngine(setSynth, "brightness", value)} />
+            <RotaryKnob label="Bright" value={synth.brightness} onChange={(value) => updateEngine(setSynth, "brightness", value)} />
           </EngineCard>
 
           <EngineCard title="Texture Engine" accent="#39e7ff">
             <RotaryKnob label="Drone" value={texture.drone} onChange={(value) => updateEngine(setTexture, "drone", value)} />
             <RotaryKnob label="Noise" value={texture.noise} onChange={(value) => updateEngine(setTexture, "noise", value)} />
-            <RotaryKnob label="Metallic" value={texture.metallic} onChange={(value) => updateEngine(setTexture, "metallic", value)} />
+            <RotaryKnob label="Metal" value={texture.metallic} onChange={(value) => updateEngine(setTexture, "metallic", value)} />
             <RotaryKnob label="Motion" value={texture.motion} onChange={(value) => updateEngine(setTexture, "motion", value)} />
             <RotaryKnob label="Width" value={texture.width} onChange={(value) => updateEngine(setTexture, "width", value)} />
-            <RotaryKnob label="Darkness" value={texture.darkness} onChange={(value) => updateEngine(setTexture, "darkness", value)} />
+            <RotaryKnob label="Dark" value={texture.darkness} onChange={(value) => updateEngine(setTexture, "darkness", value)} />
           </EngineCard>
 
           <EngineCard title="FX Engine" accent="#c8ff36">
             <RotaryKnob label="Delay" value={fx.delay} onChange={(value) => updateEngine(setFx, "delay", value)} />
             <RotaryKnob label="Reverb" value={fx.reverb} onChange={(value) => updateEngine(setFx, "reverb", value)} />
-            <RotaryKnob label="Distortion" value={fx.distortion} onChange={(value) => updateEngine(setFx, "distortion", value)} />
+            <RotaryKnob label="Distort" value={fx.distortion} onChange={(value) => updateEngine(setFx, "distortion", value)} />
             <RotaryKnob label="Feedback" value={fx.feedback} onChange={(value) => updateEngine(setFx, "feedback", value)} />
             <RotaryKnob label="Freeze" value={fx.freeze} onChange={(value) => updateEngine(setFx, "freeze", value)} />
             <RotaryKnob label="Glitch" value={fx.glitch} onChange={(value) => updateEngine(setFx, "glitch", value)} />
+          </EngineCard>
+
+          <EngineCard title="Master" accent="#ffb454" className="master-card">
+            <div className="master-readout">
+              <span>Master Vol</span>
+              <b>{Math.round(mapRange(Object.values(volumes).reduce((sum, value) => sum + value, 0) / TRACKS.length, -32, 6, 0, 100))}</b>
+            </div>
+            <div className="master-action">
+              <span>Panic</span>
+              <button onClick={stopTone}>Stop All</button>
+            </div>
+            <div className="master-status">
+              <span>Limiter Status</span>
+              <b>ARMED</b>
+            </div>
           </EngineCard>
 
           <div className="phase-status-card">
@@ -1774,9 +1995,9 @@ export default function Home() {
   );
 }
 
-function EngineCard({ title, accent, children }: { title: string; accent: string; children: React.ReactNode }) {
+function EngineCard({ title, accent, children, className = "" }: { title: string; accent: string; children: React.ReactNode; className?: string }) {
   return (
-    <div className="engine-card" style={{ "--accent": accent } as React.CSSProperties}>
+    <div className={`engine-card ${className}`.trim()} style={{ "--accent": accent } as React.CSSProperties}>
       <h2>{title}</h2>
       <div className="engine-controls">{children}</div>
     </div>
