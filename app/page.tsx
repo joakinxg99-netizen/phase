@@ -830,15 +830,24 @@ export default function Home() {
                 }}
               />
               {playing && (
-                <motion.div
-                  animate={{rotate:360}}
-                  transition={{duration:60/bpm*4, repeat:Infinity, ease:"linear"}}
-                  style={{
-                    position:"absolute", top:"50%", left:"50%",
-                    width:"50%", height:1, transformOrigin:"0 50%",
-                    background:"linear-gradient(90deg,rgba(34,211,238,.9),transparent)",
-                    pointerEvents:"none", zIndex:5,
-                  }}
+  <motion.div
+    animate={{
+      left: `calc(72px + ${step} * ((100% - 72px - 15 * 6px) / 16))`,
+    }}
+    transition={{ duration: 0.08, ease: "linear" }}
+    style={{
+      position: "absolute",
+      top: 18,
+      bottom: 10,
+      width: 2,
+      borderRadius: 999,
+      background: "linear-gradient(180deg,#22d3ee,transparent)",
+      boxShadow: "0 0 18px rgba(34,211,238,.8)",
+      pointerEvents: "none",
+      zIndex: 7,
+    }}
+  />
+)}
                 />
               )}
               <div style={{display:"grid", gridTemplateColumns:"72px repeat(16,1fr)", gap:6, position:"relative", zIndex:6}}>
