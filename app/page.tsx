@@ -1,1046 +1,1932 @@
 "use client";
 
+import type React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as Tone from "tone";
 import {
-  useEffect, useRef, useState, useCallback, useMemo, memo
-} from "react";
-import { motion } from "framer-motion";
+  Activity,
+  Disc3,
+  Pause,
+  Play,
+  RefreshCw,
+  SlidersHorizontal,
+  Sparkles,
+  Square,
+  Waves,
+} from "lucide-react";
 
-type AnyObj = Record<string, any>;
-type Grid = boolean[][];
-type TrackName = "KICK" | "HAT" | "PERC" | "BASS" | "SYNTH";
+const STEPS = 16;
+const TRACKS = ["KICK", "HAT", "PERC", "BASS", "SYNTH"] as const;
+type TrackId = (typeof TRACKS)[number];
+type EngineMode = "tone" | "strudel";
+type RootNote = "C" | "C#" | "D" | "D#" | "E" | "F" | "F#" | "G" | "G#" | "A" | "A#" | "B";
+type ScaleName = "minor" | "dorian" | "phrygian" | "harmonic" | "pentatonic";
+type MoodName = "noir" | "hypnotic" | "acid" | "ritual" | "aerial";
+type PerformanceAction = "MORPH" | "BUILD" | "STRIP" | "HOLD" | "SHIFT" | "FRACTURE" | "BURST" | "INIT";
 
-interface MacroState { label: string; value: number; color: string; }
-interface SynthMod   { cutoff: number; motion: number; detune: number; delay: number; space: number; width: number; }
-interface BassMod    { cutoff: number; punch: number; drive: number; decay: number; acidRes: number; }
-interface PercMod    { tone: number; snap: number; space: number; type: string; }
-interface FxState    { reverb: number; delay: number; drive: number; }
-interface XyPos      { x: number; y: number; }
-
-const TRACKS: readonly TrackName[] = ["KICK", "HAT", "PERC", "BASS", "SYNTH"];
-const TRACK_COLORS = ["#ec4899", "#22d3ee", "#8b5cf6", "#a3e635", "#f97316"] as const;
-
-const CHORDS_POOL = [
-  "Dm7","Fsus2","A5","Cmin","Gm7","Bbmaj7","Esus4","Am",
-  "F#m","Em9","Dm9","Fm7","C#m","Abmaj7","Ebmaj7","Bm7",
-] as const;
-const INIT_CHORDS = ["Dm7","Fsus2","A5","Cmin","Gm7"];
-
-const PERC_SOUND_MAP: Record<string, string> = {
-  rim:"rim", shaker:"shaker", lt:"lt", mt:"mt",
-  ht:"ht",  hc:"hc",         metal:"metal", noise:"can",
-};
-const PERC_TYPES = ["rim","shaker","lt","mt","ht","hc","metal","noise"] as const;
-
-const GROOVE_KICK = [
-  [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
-  [1,0,0,0,0,0,0,0,1,0,0,0,0,0,1,0],
-  [1,0,0,0,1,0,0,1,0,0,1,0,0,0,0,0],
-  [1,0,0,0,0,0,1,0,1,0,0,0,1,0,0,0],
-  [1,0,0,1,0,0,0,0,1,0,0,0,0,0,0,0],
-];
-const GROOVE_HAT = [
-  [0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
-  [0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0],
-  [1,0,1,1,0,1,0,1,1,0,1,0,1,1,0,1],
-  [0,1,1,0,1,0,1,0,0,1,0,1,0,1,1,0],
-  [0,1,0,0,1,0,1,0,0,1,0,0,1,0,0,1],
-];
-const GROOVE_PERC = [
-  [0,0,0,1,0,0,1,0,0,0,0,1,0,0,1,0],
-  [0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0],
-  [0,0,0,0,1,0,0,0,0,1,0,0,0,0,1,0],
-  [0,0,1,0,0,1,0,0,0,0,1,0,0,1,0,0],
-];
-// Extra grooves for randomize
-const GROOVE_BASS = [
-  [1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0],
-  [1,0,0,1,0,0,0,0,1,0,0,1,0,0,0,0],
-  [1,0,0,0,0,0,1,0,0,0,1,0,0,0,0,0],
-  [1,0,1,0,0,0,1,0,1,0,0,0,1,0,0,0],
-];
-const GROOVE_SYNTH = [
-  [0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0],
-  [1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0],
-  [0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0],
-  [1,0,0,0,1,0,0,0,0,0,1,0,0,0,1,0],
-];
-
-const CHORD_TO_BASS: Record<string, string[]> = {
-  "Dm7":   ["d2","~","~","f2","~","a1","~","~","d2","~","c2","~","a1","~","~","~"],
-  "Fsus2": ["f1","~","~","c2","~","~","f1","~","f1","~","g1","~","~","c2","~","~"],
-  "A5":    ["a1","~","~","e2","~","~","a1","~","a1","~","~","e2","~","a1","~","~"],
-  "Cmin":  ["c2","~","~","g1","~","eb2","~","~","c2","~","~","g1","~","eb2","~","~"],
-  "Gm7":   ["g1","~","~","d2","~","f2","~","~","g1","~","~","d2","~","f1","~","~"],
-  "Bbmaj7":["bb1","~","~","f2","~","a2","~","~","bb1","~","~","f2","~","d2","~","~"],
-  "Esus4": ["e1","~","~","b1","~","e2","~","~","e1","~","a1","~","~","b1","~","~"],
-  "Am":    ["a1","~","~","e2","~","a1","~","~","a1","~","c2","~","~","e2","~","~"],
-  "F#m":   ["f#1","~","~","c#2","~","f#1","~","~","f#1","~","a1","~","~","c#2","~","~"],
-  "Em9":   ["e1","~","~","b1","~","d2","~","~","e1","~","g1","~","b1","~","~","~"],
-  "Dm9":   ["d2","~","~","a1","~","c2","~","~","d2","~","f2","~","e2","~","~","~"],
-  "Fm7":   ["f1","~","~","c2","~","eb2","~","~","f1","~","ab1","~","~","c2","~","~"],
-  "C#m":   ["c#2","~","~","g#1","~","c#2","~","~","c#2","~","e2","~","g#1","~","~","~"],
-  "Abmaj7":["ab1","~","~","eb2","~","g2","~","~","ab1","~","c2","~","eb2","~","~","~"],
-  "Ebmaj7":["eb2","~","~","bb1","~","g2","~","~","eb2","~","bb1","~","g1","~","~","~"],
-  "Bm7":   ["b1","~","~","f#2","~","a1","~","~","b1","~","d2","~","f#1","~","~","~"],
-};
-
-const CHORD_TO_SYNTH: Record<string, string[]> = {
-  "Dm7":   ["d4","~","f4","~","a4","~","c5","~","d4","~","f4","~","a4","~","c5","~"],
-  "Fsus2": ["f4","~","g4","~","c5","~","f4","~","f4","~","g4","~","c5","~","f4","~"],
-  "A5":    ["a4","~","e4","~","a4","~","e5","~","a4","~","e4","~","a4","~","e5","~"],
-  "Cmin":  ["c5","~","eb4","~","g4","~","c5","~","c5","~","bb4","~","g4","~","eb4","~"],
-  "Gm7":   ["g4","~","bb4","~","d5","~","f4","~","g4","~","bb4","~","d5","~","f4","~"],
-  "Bbmaj7":["bb4","~","d5","~","f5","~","a4","~","bb4","~","d5","~","f5","~","a4","~"],
-  "Esus4": ["e4","~","a4","~","b4","~","e5","~","e4","~","a4","~","b4","~","e5","~"],
-  "Am":    ["a4","~","c5","~","e5","~","a4","~","a4","~","c5","~","e5","~","a4","~"],
-  "F#m":   ["f#4","~","a4","~","c#5","~","f#4","~","f#4","~","a4","~","c#5","~","f#4","~"],
-  "Em9":   ["e4","~","g4","~","b4","~","d5","~","e4","~","g4","~","b4","~","d5","~"],
-  "Dm9":   ["d4","~","f4","~","a4","~","e5","~","d4","~","f4","~","a4","~","e5","~"],
-  "Fm7":   ["f4","~","ab4","~","c5","~","eb4","~","f4","~","ab4","~","c5","~","eb4","~"],
-  "C#m":   ["c#5","~","e4","~","g#4","~","c#5","~","c#5","~","e4","~","g#4","~","c#5","~"],
-  "Abmaj7":["ab4","~","c5","~","eb5","~","g4","~","ab4","~","c5","~","eb5","~","g4","~"],
-  "Ebmaj7":["eb4","~","g4","~","bb4","~","d5","~","eb4","~","g4","~","bb4","~","d5","~"],
-  "Bm7":   ["b4","~","d5","~","f#4","~","a4","~","b4","~","d5","~","f#4","~","a4","~"],
-};
-
-const INIT_MACROS: MacroState[] = [
-  { label:"CHAOS",    value:42, color:"#ec4899" },
-  { label:"DARKNESS", value:67, color:"#8b5cf6" },
-  { label:"MOTION",   value:55, color:"#22d3ee" },
-  { label:"ACID",     value:78, color:"#a3e635" },
-  { label:"SPACE",    value:33, color:"#38bdf8" },
-  { label:"DENSITY",  value:89, color:"#f472b6" },
-];
-const INIT_VOLUMES  = [0.92, 0.56, 0.60, 0.62, 0.34, 1.0];
-const INIT_SYNTH: SynthMod = { cutoff:58, motion:34, detune:28, delay:32, space:40, width:60 };
-const INIT_BASS: BassMod   = { cutoff:52, punch:78, drive:42, decay:38, acidRes:60 };
-const INIT_PERC: PercMod   = { tone:62, snap:58, space:24, type:"rim" };
-const INIT_FX: FxState     = { reverb:51, delay:43, drive:62 };
-
-function makeGrid(): Grid {
-  return TRACKS.map((_,r) =>
-    Array.from({length:16},(_,i) => {
-      if (r===0) return i%4===0;
-      if (r===1) return i%2===1;
-      if (r===2) return [3,6,10,14].includes(i);
-      if (r===3) return [0,4,7,10,12].includes(i);
-      return [0,5,8,13].includes(i);
-    })
-  );
+interface Step {
+  active: boolean;
+  probability: number;
+  repeat: number;
+  velocity: number;
+  note?: string;
+  locks?: StepLocks;
 }
 
-function rowToMini(row: boolean[], vals: string[]): string {
-  return row.map((on,i) => on ? vals[i % vals.length] : "~").join(" ");
-}
-function rowToSound(row: boolean[], snd: string): string {
-  return row.map(on => on ? snd : "~").join(" ");
-}
-function clamp(v: number, lo=0, hi=1): number {
-  return Math.max(lo, Math.min(hi, v));
-}
-function rand(n: number): number { return Math.floor(Math.random()*n); }
-
-interface AudioParams {
-  kickStr: string; kickGain: number;
-  hatStr: string; hatGain: number;
-  percStr: string; percGain: number; percLpf: number; percRoom: number;
-  bassNotes: string; bassCut: number; bassLpf: number; bassGain: number;
-  bassDecayNote: number;
-  synthNotes: string; synthCut: number; synthLpf: number;
-  synthDelay: number; synthRoom: number; synthGain: number;
-  synthDetune: number; synthWidth: number;
-  driveMul: number;
-  isGlitch: boolean;
+interface StepLocks {
+  tone?: number;
+  space?: number;
+  drive?: number;
 }
 
-function computeAudioParams(
-  grid: Grid, macros: MacroState[], xy: XyPos, fx: FxState,
-  sm: SynthMod, bm: BassMod, pm: PercMod, chords: string[],
-  soloMute: Record<string,"solo"|"mute"|null>, volumes: number[], isGlitch: boolean
-): AudioParams {
-  const darkness = macros[1].value / 100;
-  const motion   = macros[2].value / 100;
-  const acid     = macros[3].value / 100;
-  const space    = macros[4].value / 100;
-  const density  = macros[5].value / 100;
-  const xyB = xy.x, xyD = 1 - xy.y, xyW = xy.x;
+interface EuclideanLane {
+  enabled: boolean;
+  hits: number;
+  rotate: number;
+}
 
-  const hasSolo = Object.values(soloMute).some(v => v === "solo");
-  function effectiveGain(name: string, base: number): number {
-    const idx = TRACKS.indexOf(name as TrackName);
-    const vol = idx >= 0 ? volumes[idx] : 1;
-    const master = volumes[5] ?? 1;
-    if (soloMute[name] === "mute") return 0;
-    if (hasSolo && soloMute[name] !== "solo") return 0;
-    return clamp(base * vol * master);
+interface RhythmEngine {
+  density: number;
+  groove: number;
+  swing: number;
+  probability: number;
+  repeat: number;
+  chaos: number;
+}
+
+interface BassEngine {
+  root: RootNote;
+  motion: number;
+  acid: number;
+  drive: number;
+  mutation: number;
+  energy: number;
+}
+
+interface SynthEngine {
+  scale: ScaleName;
+  mood: MoodName;
+  tension: number;
+  movement: number;
+  space: number;
+  brightness: number;
+}
+
+interface TextureEngine {
+  drone: number;
+  noise: number;
+  metallic: number;
+  motion: number;
+  width: number;
+  darkness: number;
+}
+
+interface FxEngine {
+  delay: number;
+  reverb: number;
+  distortion: number;
+  feedback: number;
+  freeze: number;
+  glitch: number;
+}
+
+interface XYState {
+  x: number;
+  y: number;
+  active: boolean;
+  held: boolean;
+}
+
+interface AudioRig {
+  kick: Tone.MembraneSynth;
+  hat: Tone.NoiseSynth;
+  hatFilter: Tone.Filter;
+  perc: Tone.MembraneSynth;
+  percFilter: Tone.Filter;
+  bass: Tone.MonoSynth;
+  bassFilter: Tone.Filter;
+  bassDrive: Tone.Distortion;
+  synth: Tone.PolySynth<Tone.Synth>;
+  synthFilter: Tone.Filter;
+  textureDrone: Tone.Oscillator;
+  textureNoise: Tone.Noise;
+  textureGain: Tone.Gain;
+  textureFilter: Tone.Filter;
+  delay: Tone.FeedbackDelay;
+  reverb: Tone.Reverb;
+  drive: Tone.Distortion;
+  volume: Tone.Volume;
+  trackVolumes: Record<TrackId, Tone.Volume>;
+}
+
+interface SampleEntry {
+  player: Tone.Player;
+  url: string;
+  name: string;
+}
+
+interface PresetData {
+  id: string;
+  name: string;
+  createdAt: number;
+  pattern: Record<TrackId, Step[]>;
+  bpm: number;
+  engineMode: EngineMode;
+  rhythm: RhythmEngine;
+  bass: BassEngine;
+  synth: SynthEngine;
+  texture: TextureEngine;
+  fx: FxEngine;
+  xy: XYState;
+  lengths: Record<TrackId, number>;
+  euclidean: Record<TrackId, EuclideanLane>;
+  volumes: Record<TrackId, number>;
+  mutes: Record<TrackId, boolean>;
+  solos: Record<TrackId, boolean>;
+  sampleNames: Partial<Record<SampleTrack, string>>;
+}
+
+interface StrudelPattern {
+  gain(value: number): StrudelPattern;
+  distort(value: number): StrudelPattern;
+  hpf(value: number): StrudelPattern;
+  room(value: number): StrudelPattern;
+  lpf(value: number): StrudelPattern;
+  lpq(value: number): StrudelPattern;
+  delay(value: number): StrudelPattern;
+  s(value: string): StrudelPattern;
+}
+
+interface StrudelScheduler {
+  setPattern(pattern: StrudelPattern): void;
+  start(): void;
+  stop(): void;
+}
+
+interface StrudelRepl {
+  scheduler: StrudelScheduler;
+}
+
+interface StrudelModules {
+  initAudioOnFirstClick?: () => void;
+  getAudioContext?: () => AudioContext | undefined;
+  repl: (options: { defaultOutput: unknown; getTime: () => number }) => StrudelRepl;
+  webaudioOutput: unknown;
+  sound: (pattern: string) => StrudelPattern;
+  note: (pattern: string) => StrudelPattern;
+  stack: (...patterns: StrudelPattern[]) => StrudelPattern;
+}
+
+interface PhaseDiagnostics {
+  audioStartAttempts: number;
+  audioStarted: boolean;
+  toneContextState: string;
+  triggerCount: number;
+  lastTrigger?: TrackId;
+  lastPerformanceAction?: PerformanceAction;
+  xyMoves: number;
+  lastXY: { x: number; y: number };
+}
+
+declare global {
+  interface Window {
+    __PHASE_DIAGNOSTICS__?: PhaseDiagnostics;
   }
+}
 
-  const kickStr  = rowToSound(grid[0], "bd");
-  const kickGain = effectiveGain("KICK", 0.94 + density * 0.06);
-  const hatStr   = isGlitch ? "hh hh hh hh hh hh hh hh hh hh hh hh hh hh hh hh" : rowToSound(grid[1], "hh");
-  const hatGain  = effectiveGain("HAT", 0.48 + density * 0.18);
-  const percSnd  = PERC_SOUND_MAP[pm.type] || "rim";
-  const percStr  = isGlitch ? `${percSnd} ~ ${percSnd} ${percSnd} ~ ${percSnd} ~ ~ ${percSnd} ~ ~ ${percSnd} ~ ${percSnd} ~ ~` : rowToSound(grid[2], percSnd);
-  const percLpf  = Math.round(400 + (pm.tone / 100) * 8500);
-  const percRoom = clamp((pm.space / 100) * 0.72 + space * 0.10, 0, 0.82);
-  const percGain = effectiveGain("PERC", 0.42 + (pm.snap / 100) * 0.44);
+function writePhaseDiagnostics(patch: Partial<PhaseDiagnostics>) {
+  if (typeof window === "undefined") return;
 
-  const chord    = chords[0] || "Dm7";
-  const bassNotes = rowToMini(grid[3], CHORD_TO_BASS[chord] || CHORD_TO_BASS["Dm7"]);
-  const baseCut  = Math.round(55 + (bm.cutoff/100)*840 + (1-darkness)*440 + xyB*500);
-  const bassLpf  = Math.round(baseCut + acid*(bm.acidRes/100)*700 + (bm.drive/100)*200);
-  const bassGain = effectiveGain("BASS", 0.46 + darkness*0.24 + (bm.punch/100)*0.28);
-  const bassDecayNote = Math.round(baseCut * (0.25 + (bm.decay / 100) * 0.75));
-  const driveMul = 1 + (fx.drive / 100) * 0.55;
+  const current = window.__PHASE_DIAGNOSTICS__ || {
+    audioStartAttempts: 0,
+    audioStarted: false,
+    toneContextState: "unknown",
+    triggerCount: 0,
+    xyMoves: 0,
+    lastXY: { x: 0, y: 0 },
+  };
+  const next = { ...current, ...patch };
+  window.__PHASE_DIAGNOSTICS__ = next;
 
-  const synthNotes = rowToMini(grid[4], CHORD_TO_SYNTH[chord] || CHORD_TO_SYNTH["Dm7"]);
-  const synthCut   = Math.round(320 + (sm.cutoff/100)*4400 + (1-darkness)*900 + xyB*1900);
-  const synthLpf   = Math.round(synthCut + acid*640 + (sm.motion/100)*400);
-  const synthDelay = clamp(0.05 + (sm.delay/100)*0.48 + motion*0.18 + xyD*0.28 + (fx.delay/100)*0.22);
-  const synthRoom  = clamp(0.07 + (sm.space/100)*0.58 + space*0.32 + xyD*0.30 + (fx.reverb/100)*0.18);
-  const synthWidth  = clamp((sm.width / 100) * 0.8 + xyW * 0.2, 0, 1);
-  const synthDetune = (sm.detune / 100) * 0.18 + synthWidth * 0.06;
-  const synthGain   = effectiveGain("SYNTH", clamp(0.20 + density*0.10 + (sm.motion/100)*0.06) * (1 + synthDetune));
+  const dataset = document.documentElement.dataset;
+  dataset.phaseAudioStartAttempts = String(next.audioStartAttempts);
+  dataset.phaseAudioStarted = String(next.audioStarted);
+  dataset.phaseToneContextState = next.toneContextState;
+  dataset.phaseTriggerCount = String(next.triggerCount);
+  dataset.phaseLastTrigger = next.lastTrigger || "";
+  dataset.phaseLastPerformanceAction = next.lastPerformanceAction || "";
+  dataset.phaseXyMoves = String(next.xyMoves);
+  dataset.phaseLastX = String(next.lastXY.x);
+  dataset.phaseLastY = String(next.lastXY.y);
+}
 
-  return {
-    kickStr, kickGain, hatStr, hatGain, percStr, percGain, percLpf, percRoom,
-    bassNotes, bassCut: isGlitch ? Math.round(baseCut * 0.38) : baseCut, bassLpf, bassGain, bassDecayNote,
-    synthNotes, synthCut, synthLpf, synthDelay, synthRoom, synthGain, synthDetune, synthWidth,
-    driveMul, isGlitch,
+const NOTE_NAMES: RootNote[] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const SCALE_INTERVALS: Record<ScaleName, number[]> = {
+  minor: [0, 2, 3, 5, 7, 8, 10],
+  dorian: [0, 2, 3, 5, 7, 9, 10],
+  phrygian: [0, 1, 3, 5, 7, 8, 10],
+  harmonic: [0, 2, 3, 5, 7, 8, 11],
+  pentatonic: [0, 3, 5, 7, 10],
+};
+
+const DEFAULT_RHYTHM: RhythmEngine = {
+  density: 40,
+  groove: 20,
+  swing: 0,
+  probability: 100,
+  repeat: 0,
+  chaos: 6,
+};
+
+const DEFAULT_BASS: BassEngine = {
+  root: "D",
+  motion: 30,
+  acid: 35,
+  drive: 25,
+  mutation: 10,
+  energy: 60,
+};
+
+const DEFAULT_SYNTH: SynthEngine = {
+  scale: "dorian",
+  mood: "noir",
+  tension: 20,
+  movement: 20,
+  space: 20,
+  brightness: 25,
+};
+
+const DEFAULT_TEXTURE: TextureEngine = {
+  drone: 8,
+  noise: 0,
+  metallic: 5,
+  motion: 10,
+  width: 35,
+  darkness: 75,
+};
+
+const DEFAULT_FX: FxEngine = {
+  delay: 10,
+  reverb: 12,
+  distortion: 5,
+  feedback: 8,
+  freeze: 0,
+  glitch: 0,
+};
+
+const TRACK_COLORS: Record<TrackId, string> = {
+  KICK: "#a779ff",
+  HAT: "#39e7ff",
+  PERC: "#c8ff36",
+  BASS: "#ff4f91",
+  SYNTH: "#78ffe5",
+};
+
+const SAMPLE_TRACKS = ["KICK", "HAT", "PERC"] as const;
+type SampleTrack = (typeof SAMPLE_TRACKS)[number];
+const PRESET_STORAGE_KEY = "phase.presets.v3";
+const DEFAULT_LENGTHS: Record<TrackId, number> = { KICK: 16, HAT: 16, PERC: 16, BASS: 16, SYNTH: 16 };
+const DEFAULT_VOLUMES: Record<TrackId, number> = { KICK: -2, HAT: -10, PERC: -8, BASS: -4, SYNTH: -10 };
+const DEFAULT_BOOLEAN_TRACKS: Record<TrackId, boolean> = { KICK: false, HAT: false, PERC: false, BASS: false, SYNTH: false };
+const DEFAULT_EUCLIDEAN: Record<TrackId, EuclideanLane> = {
+  KICK: { enabled: false, hits: 4, rotate: 0 },
+  HAT: { enabled: false, hits: 9, rotate: 1 },
+  PERC: { enabled: false, hits: 5, rotate: 3 },
+  BASS: { enabled: false, hits: 4, rotate: 0 },
+  SYNTH: { enabled: false, hits: 4, rotate: 2 },
+};
+
+const PERFORMANCE_ACTIONS: PerformanceAction[] = ["MORPH", "BUILD", "STRIP", "HOLD", "SHIFT", "FRACTURE", "BURST", "INIT"];
+
+function clamp(value: number, min = 0, max = 100) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function mapRange(value: number, inMin: number, inMax: number, outMin: number, outMax: number) {
+  const t = clamp01((value - inMin) / (inMax - inMin));
+  return outMin + (outMax - outMin) * t;
+}
+
+function pick<T>(items: readonly T[]) {
+  return items[Math.floor(Math.random() * items.length)] || items[0];
+}
+
+function seededRandom(seed: number) {
+  let value = seed >>> 0;
+  return () => {
+    value = (value * 1664525 + 1013904223) >>> 0;
+    return value / 4294967296;
   };
 }
 
+function pickWith<T>(items: readonly T[], random: () => number) {
+  return items[Math.floor(random() * items.length)] || items[0];
+}
+
+function rootMidi(root: RootNote, octave: number) {
+  return 12 * (octave + 1) + NOTE_NAMES.indexOf(root);
+}
+
+function midiToNote(midi: number) {
+  const note = NOTE_NAMES[((midi % 12) + 12) % 12];
+  const octave = Math.floor(midi / 12) - 1;
+  return `${note}${octave}`;
+}
+
+function scaleNote(root: RootNote, scale: ScaleName, degree: number, octave = 2) {
+  const intervals = SCALE_INTERVALS[scale];
+  const normalized = ((degree % intervals.length) + intervals.length) % intervals.length;
+  const octaveOffset = Math.floor(degree / intervals.length);
+  return midiToNote(rootMidi(root, octave + octaveOffset) + intervals[normalized]);
+}
+
+function makeStep(active = false, track: TrackId = "KICK", index = 0): Step {
+  return {
+    active,
+    probability: 100,
+    repeat: 1,
+    velocity: 96,
+    note: track === "BASS" ? scaleNote(DEFAULT_BASS.root, DEFAULT_SYNTH.scale, index % 5, 1) : track === "SYNTH" ? scaleNote(DEFAULT_BASS.root, DEFAULT_SYNTH.scale, index % 7, 3) : undefined,
+  };
+}
+
+function euclid(length: number, hits: number, rotate = 0) {
+  const safeLength = Math.max(1, Math.min(STEPS, Math.round(length)));
+  const safeHits = Math.max(0, Math.min(safeLength, Math.round(hits)));
+  if (safeHits <= 0) return Array.from({ length: safeLength }, () => false);
+  if (safeHits >= safeLength) return Array.from({ length: safeLength }, () => true);
+  const raw = Array.from({ length: safeLength }, (_, i) => ((i * safeHits) % safeLength) < safeHits);
+  return Array.from({ length: safeLength }, (_, i) => raw[(i - rotate + safeLength) % safeLength]);
+}
+
+function createPattern(rhythm = DEFAULT_RHYTHM, bass = DEFAULT_BASS, synth = DEFAULT_SYNTH, seed = 0x50484153) {
+  const random = seededRandom(seed + rhythm.density * 17 + rhythm.chaos * 31 + bass.motion * 43 + bass.mutation * 59 + synth.movement * 71 + synth.tension * 89);
+  const pattern: Record<TrackId, Step[]> = {
+    KICK: Array.from({ length: STEPS }, (_, i) => makeStep(i % 4 === 0, "KICK", i)),
+    HAT: Array.from({ length: STEPS }, (_, i) => makeStep(i % 4 === 2, "HAT", i)),
+    PERC: Array.from({ length: STEPS }, (_, i) => makeStep([3, 6, 10, 14].includes(i), "PERC", i)),
+    BASS: Array.from({ length: STEPS }, (_, i) => {
+      const strong = [0, 6, 10].includes(i);
+      const support = bass.motion > 48 && [7, 15].includes(i) && random() < mapRange(bass.motion, 48, 100, 0.08, 0.38);
+      const step = makeStep(strong || support, "BASS", i);
+      step.note = scaleNote(bass.root, synth.scale, strong ? 0 : 2 + Math.round(bass.mutation / 35), 1);
+      step.velocity = strong ? 92 : 70;
+      step.repeat = bass.acid > 70 && random() < 0.2 ? 2 : 1;
+      return step;
+    }),
+    SYNTH: Array.from({ length: STEPS }, (_, i) => {
+      const active = [4, 12].includes(i) || (synth.movement > 68 && i % 8 === 0) || (synth.movement > 48 && random() < mapRange(synth.movement, 48, 100, 0.02, 0.1));
+      const step = makeStep(active, "SYNTH", i);
+      step.note = scaleNote(bass.root, synth.scale, i + Math.round(synth.tension / 28), 3);
+      step.probability = Math.round(mapRange(rhythm.probability, 0, 100, 48, 100));
+      return step;
+    }),
+  };
+
+  pattern.HAT.forEach((step) => {
+    step.probability = Math.round(mapRange(rhythm.probability, 0, 100, 42, 100));
+    step.repeat = rhythm.repeat > 64 && random() < 0.36 ? 2 : 1;
+  });
+  pattern.PERC.forEach((step) => {
+    step.probability = Math.round(mapRange(rhythm.probability + rhythm.chaos, 0, 200, 46, 100));
+    step.repeat = rhythm.repeat > 36 && random() < rhythm.repeat / 180 ? pickWith([1, 2, 3], random) : 1;
+  });
+  return pattern;
+}
+
 export default function Home() {
-  const [grid, setGrid]           = useState<Grid>(makeGrid);
-  const [playing, setPlaying]     = useState(false);
-  const [step, setStep]           = useState(0);
-  const [bpm, setBpm]             = useState(138);
-  const [status, setStatus]       = useState("IDLE");
-  const [chords, setChords]       = useState<string[]>(INIT_CHORDS);
-  const [error, setError]         = useState("");
-  const [macros, setMacros]       = useState<MacroState[]>(INIT_MACROS);
-  const [recActive, setRecActive] = useState(false);
-  const [soloMute, setSoloMute]   = useState<Record<string,"solo"|"mute"|null>>({});
-  const [fxValues, setFxValues]   = useState<FxState>(INIT_FX);
-  const [xyPos, setXyPos]         = useState<XyPos>({ x:0.5, y:0.5 });
-  const [synthMod, setSynthMod]   = useState<SynthMod>(INIT_SYNTH);
-  const [bassMod, setBassMod]     = useState<BassMod>(INIT_BASS);
-  const [percMod, setPercMod]     = useState<PercMod>(INIT_PERC);
-  const [volumes, setVolumes]     = useState<number[]>(INIT_VOLUMES);
-  const [vuLevels, setVuLevels]   = useState<number[]>([0,0,0,0,0,0]);
-  const [waveAmps, setWaveAmps]   = useState<number[]>(() => Array.from({length:28},()=>0.15));
-  const [glitching, setGlitching] = useState(false);
+  const [pattern, setPattern] = useState<Record<TrackId, Step[]>>(() => createPattern());
+  const [playing, setPlaying] = useState(false);
+  const [activeStep, setActiveStep] = useState(-1);
+  const [bpm, setBpm] = useState(136);
+  const [engineMode, setEngineMode] = useState<EngineMode>("tone");
+  const [rhythm, setRhythm] = useState<RhythmEngine>(DEFAULT_RHYTHM);
+  const [bass, setBass] = useState<BassEngine>(DEFAULT_BASS);
+  const [synth, setSynth] = useState<SynthEngine>(DEFAULT_SYNTH);
+  const [texture, setTexture] = useState<TextureEngine>(DEFAULT_TEXTURE);
+  const [fx, setFx] = useState<FxEngine>(DEFAULT_FX);
+  const [xy, setXy] = useState<XYState>({ x: 0.42, y: 0.3, active: false, held: true });
+  const [held, setHeld] = useState(false);
+  const [status, setStatus] = useState("PHASE initialized");
+  const [lengths, setLengths] = useState<Record<TrackId, number>>(DEFAULT_LENGTHS);
+  const [euclidean, setEuclidean] = useState<Record<TrackId, EuclideanLane>>(DEFAULT_EUCLIDEAN);
+  const [volumes, setVolumes] = useState<Record<TrackId, number>>(DEFAULT_VOLUMES);
+  const [mutes, setMutes] = useState<Record<TrackId, boolean>>(DEFAULT_BOOLEAN_TRACKS);
+  const [solos, setSolos] = useState<Record<TrackId, boolean>>(DEFAULT_BOOLEAN_TRACKS);
+  const [sampleNames, setSampleNames] = useState<Partial<Record<SampleTrack, string>>>({});
+  const [presets, setPresets] = useState<PresetData[]>([]);
+  const [selectedPresetId, setSelectedPresetId] = useState("");
+  const [presetName, setPresetName] = useState("PHASE MEMORY 01");
+  const [dragOverTrack, setDragOverTrack] = useState<SampleTrack | null>(null);
 
-  const schedulerRef  = useRef<any>(null);
-  const strudelRef    = useRef<AnyObj|null>(null);
-  const stepTimer     = useRef<ReturnType<typeof setInterval>|null>(null);
-  const vuTimer       = useRef<ReturnType<typeof setInterval>|null>(null);
-  const glitchTimer   = useRef<ReturnType<typeof setTimeout>|null>(null);
-  const rebuildTimer  = useRef<ReturnType<typeof setTimeout>|null>(null);
-  const xyPadRef      = useRef<HTMLDivElement>(null);
-  const origGrid      = useRef<Grid>(makeGrid());
-  const pointerCapRef = useRef<number|null>(null);
+  const rigRef = useRef<AudioRig | null>(null);
+  const sequenceRef = useRef<Tone.Sequence<number> | null>(null);
+  const strudelSchedulerRef = useRef<StrudelScheduler | null>(null);
+  const strudelModulesRef = useRef<StrudelModules | null>(null);
+  const patternRef = useRef(pattern);
+  const rhythmRef = useRef(rhythm);
+  const bassRef = useRef(bass);
+  const synthRef = useRef(synth);
+  const textureRef = useRef(texture);
+  const fxRef = useRef(fx);
+  const xyRef = useRef(xy);
+  const lengthsRef = useRef(lengths);
+  const euclideanRef = useRef(euclidean);
+  const volumesRef = useRef(volumes);
+  const mutesRef = useRef(mutes);
+  const solosRef = useRef(solos);
+  const samplesRef = useRef<Partial<Record<SampleTrack, SampleEntry>>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingSampleTrackRef = useRef<SampleTrack | null>(null);
 
-  const liveRef = useRef({ grid, macros, soloMute, volumes, xyPos, fxValues, synthMod, bassMod, percMod, chords, bpm, glitch: false });
-  liveRef.current = { grid, macros, soloMute, volumes, xyPos, fxValues, synthMod, bassMod, percMod, chords, bpm, glitch: liveRef.current.glitch };
+  useEffect(() => { patternRef.current = pattern; }, [pattern]);
+  useEffect(() => { rhythmRef.current = rhythm; applyTransport(); }, [rhythm]);
+  useEffect(() => { bassRef.current = bass; applyBassEngine(); rewriteMelodicNotes("BASS"); }, [bass]);
+  useEffect(() => { synthRef.current = synth; applySynthEngine(); rewriteMelodicNotes("SYNTH"); }, [synth]);
+  useEffect(() => { textureRef.current = texture; applyTextureEngine(); }, [texture]);
+  useEffect(() => { fxRef.current = fx; applyFxEngine(); }, [fx]);
+  useEffect(() => { xyRef.current = xy; applyXY(xy.x, xy.y); }, [xy]);
+  useEffect(() => { Tone.Transport.bpm.value = bpm; }, [bpm]);
+  useEffect(() => { lengthsRef.current = lengths; }, [lengths]);
+  useEffect(() => { euclideanRef.current = euclidean; }, [euclidean]);
+  useEffect(() => {
+    volumesRef.current = volumes;
+    const rig = rigRef.current;
+    if (!rig) return;
+    const soloActive = TRACKS.some((track) => solosRef.current[track]);
+    TRACKS.forEach((track) => {
+      rig.trackVolumes[track].volume.value = volumes[track];
+      rig.trackVolumes[track].mute = soloActive ? !solosRef.current[track] : mutesRef.current[track];
+    });
+  }, [volumes]);
+  useEffect(() => {
+    mutesRef.current = mutes;
+    const rig = rigRef.current;
+    if (!rig) return;
+    const soloActive = TRACKS.some((track) => solosRef.current[track]);
+    TRACKS.forEach((track) => {
+      rig.trackVolumes[track].mute = soloActive ? !solosRef.current[track] : mutes[track];
+    });
+  }, [mutes]);
+  useEffect(() => {
+    solosRef.current = solos;
+    const rig = rigRef.current;
+    if (!rig) return;
+    const soloActive = TRACKS.some((track) => solos[track]);
+    TRACKS.forEach((track) => {
+      rig.trackVolumes[track].mute = soloActive ? !solos[track] : mutesRef.current[track];
+    });
+  }, [solos]);
 
   useEffect(() => {
-    if (!playing) { setVuLevels([0,0,0,0,0,0]); setWaveAmps(Array.from({length:28},()=>0.15)); return; }
-    let frame = 0;
-    vuTimer.current = setInterval(() => {
-      frame++;
-      const { soloMute: sm, volumes: vols } = liveRef.current;
-      const hasSolo = Object.values(sm).some(v => v === "solo");
-      setVuLevels(prev => prev.map((_,i) => {
-        const name = TRACKS[i] || "MASTER";
-        const muted = sm[name] === "mute" || (hasSolo && sm[name] !== "solo");
-        if (muted) return Math.max(0, prev[i] - 0.14);
-        const vol = i < vols.length ? vols[i] : vols[5];
-        return clamp((0.30 + 0.22 * Math.abs(Math.sin(frame * 0.37 + i * 1.3))) * vol);
-      }));
-      setWaveAmps(Array.from({length:28}, (_,i) => 0.08 + 0.82 * Math.abs(Math.sin(frame * 0.23 + i * 0.44))));
-    }, 70);
-    return () => { if (vuTimer.current) clearInterval(vuTimer.current); };
-  }, [playing]);
-
-  const initEngine = useCallback(async () => {
-    if (schedulerRef.current && strudelRef.current) return;
-    const strudel: AnyObj = await import("@strudel/web");
-    strudelRef.current = strudel;
-    const result = typeof strudel.initStrudel === "function" ? await strudel.initStrudel() : null;
-    schedulerRef.current = result?.scheduler || result?.repl?.scheduler || strudel.scheduler || strudel.getScheduler?.();
-    if (typeof strudel.samples === "function") await strudel.samples("github:tidalcycles/dirt-samples");
-    if (!schedulerRef.current) throw new Error("Strudel scheduler not found.");
-  }, []);
-
-  const buildPattern = useCallback(() => {
-    const strudel = strudelRef.current;
-    const s = strudel?.s || (globalThis as AnyObj).s;
-    const note = strudel?.note || (globalThis as AnyObj).note;
-    const stack = strudel?.stack || (globalThis as AnyObj).stack;
-    if (typeof s !== "function") throw new Error("s() unavailable");
-    if (typeof note !== "function") throw new Error("note() unavailable");
-    if (typeof stack !== "function") throw new Error("stack() unavailable");
-
-    const lr = liveRef.current;
-    const p = computeAudioParams(lr.grid, lr.macros, lr.xyPos, lr.fxValues, lr.synthMod, lr.bassMod, lr.percMod, lr.chords, lr.soloMute, lr.volumes, lr.glitch);
-    const d = p.driveMul;
-
-    let kickPat: any;
-    try { kickPat = s(p.kickStr).gain(clamp(p.kickGain * d)); } catch { kickPat = s("bd ~ ~ ~").gain(0.88); }
-    let hatPat: any;
-    try { hatPat = s(p.hatStr).gain(clamp(p.hatGain)); } catch { hatPat = s("~ hh ~ hh").gain(0.42); }
-    let percPat: any;
-    try { percPat = s(p.percStr).gain(clamp(p.percGain)).lpf(p.percLpf).room(p.percRoom); } catch { percPat = s("~ ~ rim ~").gain(0.44); }
-    let bassPat: any;
     try {
-      const bassLpfFinal = Math.round(p.bassLpf * (0.35 + (lr.bassMod.decay / 100) * 0.65));
-      bassPat = note(p.bassNotes).s("sawtooth").gain(clamp(p.bassGain * d)).cutoff(p.bassCut).lpf(bassLpfFinal);
-    } catch { bassPat = note("d2 ~ f2 ~").s("sawtooth").gain(0.42); }
-    let synthPat: any;
-    try {
-      const panA = clamp(0.5 - p.synthWidth * 0.45, 0, 1);
-      const panB = clamp(0.5 + p.synthWidth * 0.45, 0, 1);
-      let layerA: any = note(p.synthNotes).s("sawtooth").gain(clamp(p.synthGain * 0.55)).cutoff(p.synthCut).lpf(p.synthLpf).delay(p.synthDelay).room(p.synthRoom);
-      let layerB: any;
-      try { layerB = note(p.synthNotes).s("sawtooth").gain(clamp(p.synthGain * 0.50)).cutoff(Math.round(p.synthCut * 0.97)).lpf(p.synthLpf).delay(clamp(p.synthDelay + 0.008)).room(p.synthRoom); } catch { layerB = layerA; }
-      try { layerA = layerA.pan(panA); layerB = layerB.pan(panB); } catch {}
-      synthPat = stack(layerA, layerB);
+      const saved = window.localStorage.getItem(PRESET_STORAGE_KEY);
+      if (!saved) return;
+      const parsed = JSON.parse(saved) as PresetData[];
+      if (Array.isArray(parsed)) {
+        queueMicrotask(() => {
+          setPresets(parsed);
+          setSelectedPresetId(parsed[0]?.id || "");
+        });
+      }
     } catch {
-      try { synthPat = note(p.synthNotes).s("sawtooth").gain(clamp(p.synthGain)).cutoff(p.synthCut).lpf(p.synthLpf).delay(p.synthDelay).room(p.synthRoom); }
-      catch { synthPat = note("d4 ~ f4 ~").s("sawtooth").gain(0.20); }
+      queueMicrotask(() => setStatus("Preset memory unavailable"));
     }
-    return stack(kickPat, hatPat, percPat, bassPat, synthPat);
-  }, []);
-
-  const syncBpm = useCallback((val: number) => {
-    const sc = schedulerRef.current; if (!sc) return;
-    if (sc.clock?.setTempo) sc.clock.setTempo(val);
-    else if (sc.setTempo) sc.setTempo(val);
-    else if ("bpm" in sc) sc.bpm = val;
-  }, []);
-
-  const rebuildPattern = useCallback(() => {
-    if (!schedulerRef.current || rebuildTimer.current) return;
-    rebuildTimer.current = setTimeout(() => {
-      rebuildTimer.current = null;
-      if (!schedulerRef.current) return;
-      try { schedulerRef.current.setPattern(buildPattern()); } catch {}
-    }, 80);
-  }, [buildPattern]);
-
-  const play = useCallback(async () => {
-    try {
-      setError(""); setStatus("LOADING");
-      await initEngine();
-      const sc = schedulerRef.current;
-      sc.stop?.();
-      if (typeof sc.setPattern !== "function") throw new Error("No setPattern()");
-      sc.setPattern(buildPattern());
-      syncBpm(liveRef.current.bpm);
-      await sc.start?.();
-      setPlaying(true); setStatus("LIVE");
-    } catch (err: any) { setError(err?.message || String(err)); setStatus("ERROR"); }
-  }, [initEngine, buildPattern, syncBpm]);
-
-  const stop = useCallback(() => {
-    if (stepTimer.current) clearInterval(stepTimer.current);
-    if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
-    schedulerRef.current?.stop?.();
-    liveRef.current.glitch = false;
-    setGlitching(false); setPlaying(false); setStatus("STOPPED"); setStep(0);
-    if (glitchTimer.current) clearTimeout(glitchTimer.current);
   }, []);
 
   useEffect(() => {
-    if (!playing) { if (stepTimer.current) clearInterval(stepTimer.current); return; }
-    const ms = (60000 / bpm) / 4;
-    if (stepTimer.current) clearInterval(stepTimer.current);
-    stepTimer.current = setInterval(() => setStep(s => (s + 1) % 16), ms);
-    return () => { if (stepTimer.current) clearInterval(stepTimer.current); };
-  }, [playing, bpm]);
+    writePhaseDiagnostics({
+      audioStartAttempts: 0,
+      audioStarted: false,
+      toneContextState: Tone.context.state,
+      triggerCount: 0,
+      xyMoves: 0,
+      lastXY: { x: xyRef.current.x, y: xyRef.current.y },
+    });
 
-  useEffect(() => { if (playing) rebuildPattern(); },
-    [grid, macros, soloMute, volumes, xyPos, fxValues, synthMod, bassMod, percMod, chords, playing, rebuildPattern]);
-  useEffect(() => { if (playing) syncBpm(bpm); }, [bpm, playing, syncBpm]);
-
-  const toggle = useCallback((row: number, col: number) => {
-    setGrid(prev => prev.map((r,ri) => ri===row ? r.map((v,ci) => ci===col ? !v : v) : r));
+    const sampleEntries = samplesRef.current;
+    return () => {
+      stopTone();
+      try { strudelSchedulerRef.current?.stop?.(); } catch {}
+      Object.values(sampleEntries).forEach((entry) => {
+        try { entry?.player.dispose(); } catch {}
+        if (entry?.url) URL.revokeObjectURL(entry.url);
+      });
+      disposeRig();
+    };
   }, []);
 
-  const mutate = useCallback(() => {
-    const ki = rand(GROOVE_KICK.length), hi = rand(GROOVE_HAT.length), pi = rand(GROOVE_PERC.length);
-    const bi = rand(GROOVE_BASS.length), si = rand(GROOVE_SYNTH.length);
-    setGrid(prev => prev.map((row,r) => {
-      if (r===0) return GROOVE_KICK[ki].map(v => !!v);
-      if (r===1) return GROOVE_HAT[hi].map(v => !!v);
-      if (r===2) return GROOVE_PERC[pi].map(v => !!v);
-      if (r===3) return GROOVE_BASS[bi].map(v => !!v);
-      return GROOVE_SYNTH[si].map(v => !!v);
+  const engineReadout = useMemo(() => {
+    const heat = Math.round((rhythm.density + bass.energy + synth.tension + fx.distortion) / 4);
+    const space = Math.round((synth.space + texture.width + fx.reverb + xy.y * 100) / 4);
+    return { heat, space };
+  }, [rhythm.density, bass.energy, synth.tension, fx.distortion, synth.space, texture.width, fx.reverb, xy.y]);
+
+  function applyTransport() {
+    Tone.Transport.swing = mapRange(rhythmRef.current.swing, 0, 100, 0, 0.38);
+    Tone.Transport.swingSubdivision = "16n";
+  }
+
+  function disposeRig() {
+    const rig = rigRef.current;
+    if (!rig) return;
+    Object.values(rig.trackVolumes).forEach((node) => { try { node.dispose(); } catch {} });
+    Object.values(rig).forEach((node) => {
+      if (node && typeof node === "object" && "dispose" in node) {
+        try { (node as { dispose: () => void }).dispose(); } catch {}
+      }
+    });
+    rigRef.current = null;
+  }
+
+  function hasSolo() {
+    return TRACKS.some((track) => solosRef.current[track]);
+  }
+
+  function isTrackAudible(track: TrackId) {
+    const soloActive = hasSolo();
+    return soloActive ? solosRef.current[track] : !mutesRef.current[track];
+  }
+
+  function applyMixerState() {
+    const rig = rigRef.current;
+    if (!rig) return;
+    const soloActive = hasSolo();
+    TRACKS.forEach((track) => {
+      const node = rig.trackVolumes[track];
+      node.volume.value = volumesRef.current[track];
+      node.mute = soloActive ? !solosRef.current[track] : mutesRef.current[track];
+    });
+  }
+
+  function ensureRig() {
+    if (rigRef.current) return rigRef.current;
+
+    const volume = new Tone.Volume(-5).toDestination();
+    const drive = new Tone.Distortion({ distortion: 0.025, wet: 0.03 });
+    const delay = new Tone.FeedbackDelay({ delayTime: "8n", feedback: 0.08, wet: 0.04 });
+    const reverb = new Tone.Reverb({ decay: 1.8, wet: 0.05 });
+    drive.connect(delay);
+    delay.connect(reverb);
+    reverb.connect(volume);
+
+    const makeVolume = (track: TrackId, db: number) => new Tone.Volume(db).connect(drive);
+    const trackVolumes: Record<TrackId, Tone.Volume> = {
+      KICK: makeVolume("KICK", volumesRef.current.KICK),
+      HAT: makeVolume("HAT", volumesRef.current.HAT),
+      PERC: makeVolume("PERC", volumesRef.current.PERC),
+      BASS: makeVolume("BASS", volumesRef.current.BASS),
+      SYNTH: makeVolume("SYNTH", volumesRef.current.SYNTH),
+    };
+
+    const kick = new Tone.MembraneSynth({
+      pitchDecay: 0.026,
+      octaves: 8.5,
+      oscillator: { type: "sine" },
+      envelope: { attack: 0.001, decay: 0.34, sustain: 0, release: 0.025 },
+    }).connect(trackVolumes.KICK);
+
+    const hatFilter = new Tone.Filter({ type: "highpass", frequency: 7800, Q: 0.18 }).connect(trackVolumes.HAT);
+    const hat = new Tone.NoiseSynth({
+      noise: { type: "brown" },
+      envelope: { attack: 0.001, decay: 0.035, sustain: 0, release: 0.012 },
+    }).connect(hatFilter);
+
+    const percFilter = new Tone.Filter({ type: "bandpass", frequency: 980, Q: 3.2 }).connect(trackVolumes.PERC);
+    const perc = new Tone.MembraneSynth({
+      pitchDecay: 0.004,
+      octaves: 1.8,
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.001, decay: 0.07, sustain: 0, release: 0.018 },
+    }).connect(percFilter);
+
+    const bassFilter = new Tone.Filter({ type: "lowpass", frequency: 680, rolloff: -24, Q: 1.1 });
+    const bassDrive = new Tone.Distortion({ distortion: 0.1, wet: 0.14 });
+    bassDrive.connect(bassFilter);
+    bassFilter.connect(trackVolumes.BASS);
+    const bassVoice = new Tone.MonoSynth({
+      oscillator: { type: "sawtooth" },
+      envelope: { attack: 0.002, decay: 0.11, sustain: 0.12, release: 0.055 },
+      filter: { type: "lowpass", Q: 1.8, rolloff: -24 },
+      filterEnvelope: { attack: 0.002, decay: 0.11, sustain: 0.02, release: 0.055, baseFrequency: 55, octaves: 2.9 },
+      portamento: 0.012,
+    }).connect(bassDrive);
+
+    const synthFilter = new Tone.Filter({ type: "lowpass", frequency: 1450, rolloff: -24, Q: 0.45 }).connect(trackVolumes.SYNTH);
+    const synthVoice = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: "triangle" },
+      envelope: { attack: 0.024, decay: 0.28, sustain: 0.05, release: 0.38 },
+    }).connect(synthFilter);
+
+    const textureGain = new Tone.Gain(0).connect(drive);
+    const textureFilter = new Tone.Filter({ type: "lowpass", frequency: 320, Q: 0.35, rolloff: -24 }).connect(textureGain);
+    const textureDrone = new Tone.Oscillator({ frequency: 55, type: "sine" }).connect(textureFilter).start();
+    const textureNoise = new Tone.Noise({ type: "brown" }).connect(textureFilter).start();
+
+    rigRef.current = {
+      kick,
+      hat,
+      hatFilter,
+      perc,
+      percFilter,
+      bass: bassVoice,
+      bassFilter,
+      bassDrive,
+      synth: synthVoice,
+      synthFilter,
+      textureDrone,
+      textureNoise,
+      textureGain,
+      textureFilter,
+      delay,
+      reverb,
+      drive,
+      volume,
+      trackVolumes,
+    };
+
+    applyBassEngine();
+    applySynthEngine();
+    applyTextureEngine();
+    applyFxEngine();
+    applyXY(xyRef.current.x, xyRef.current.y);
+    applyMixerState();
+    return rigRef.current;
+  }
+
+  function applyBassEngine() {
+    const rig = rigRef.current;
+    if (!rig) return;
+    const next = bassRef.current;
+    rig.bassFilter.frequency.value = mapRange(next.energy, 0, 100, 220, 3200);
+    rig.bassFilter.Q.value = mapRange(next.acid, 0, 100, 0.7, 6.8);
+    rig.bassDrive.distortion = mapRange(next.drive, 0, 100, 0.02, 0.72);
+    rig.bassDrive.wet.value = mapRange(next.drive, 0, 100, 0.06, 0.62);
+    rig.bass.portamento = mapRange(next.acid + next.motion * 0.35, 0, 135, 0.002, 0.16);
+  }
+
+  function applySynthEngine() {
+    const rig = rigRef.current;
+    if (!rig) return;
+    const next = synthRef.current;
+    const x = xyRef.current.x;
+    rig.synthFilter.frequency.value = mapRange(next.brightness * 0.7 + x * 100 * 0.7, 0, 140, 680, 9200);
+    rig.synthFilter.Q.value = mapRange(next.tension, 0, 100, 0.4, 3.8);
+    rig.trackVolumes.SYNTH.volume.value = mapRange(next.mood === "aerial" ? next.space : next.tension, 0, 100, -11, -4);
+  }
+
+  function applyTextureEngine() {
+    const rig = rigRef.current;
+    if (!rig) return;
+    const next = textureRef.current;
+    const freq = mapRange(100 - next.darkness + next.metallic * 0.25, 0, 125, 120, 1600);
+    rig.textureFilter.frequency.value = freq;
+    rig.textureFilter.Q.value = mapRange(next.metallic, 0, 100, 0.18, 1.2);
+    rig.textureGain.gain.value = mapRange(next.drone * 0.45 + next.noise * 0.2, 0, 100, 0, 0.006);
+    rig.textureDrone.frequency.value = Tone.Frequency(`${bassRef.current.root}1`).toFrequency() * mapRange(next.motion, 0, 100, 0.45, 0.9);
+    rig.textureNoise.type = "brown";
+  }
+
+  function applyFxEngine() {
+    const rig = rigRef.current;
+    if (!rig) return;
+    const next = fxRef.current;
+    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.48);
+    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.08, 0.86);
+    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.6, 0, 160, 0.02, 0.72);
+    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 1.1, 12);
+    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.01, 0.58);
+    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.04, 0.46);
+  }
+
+  function restoreRunningFxAndTexture() {
+    const rig = rigRef.current;
+    if (!rig) return;
+
+    const nextFx = fxRef.current;
+    const nextTexture = textureRef.current;
+    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.08, 0.86);
+    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.48);
+    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.6, 0, 160, 0.02, 0.72);
+    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.04, 0.46);
+    rig.textureGain.gain.value = mapRange(nextTexture.drone * 0.45 + nextTexture.noise * 0.2, 0, 100, 0, 0.006);
+  }
+
+  function applyXY(x: number, y: number) {
+    const rig = rigRef.current;
+    if (!rig) return;
+    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 520, 9800);
+    rig.hatFilter.frequency.value = mapRange(x, 0, 1, 4200, 11200);
+    rig.textureFilter.frequency.value = mapRange(x, 0, 1, 120, 900);
+    rig.delay.wet.value = mapRange(y, 0, 1, 0.02, 0.56);
+    rig.reverb.wet.value = mapRange(y, 0, 1, 0.04, 0.72);
+  }
+
+  function rewriteMelodicNotes(track: "BASS" | "SYNTH") {
+    setPattern((prev) => ({
+      ...prev,
+      [track]: prev[track].map((step, index) => ({
+        ...step,
+        note: scaleNote(bassRef.current.root, synthRef.current.scale, index + (track === "SYNTH" ? Math.round(synthRef.current.tension / 24) : Math.round(bassRef.current.mutation / 32)), track === "BASS" ? 1 : 3),
+      })),
     }));
-  }, []);
+  }
 
-  const evolve = useCallback(() => {
-    setGrid(prev => prev.map((row,ri) =>
-      row.map((v,ci) => (ri===0 && ci===0) ? true : Math.random()>0.93 ? !v : v)
-    ));
-  }, []);
+  function triggerTrack(track: TrackId, step: Step, index: number, time: number) {
+    const rig = rigRef.current;
+    if (!rig || !step.active) return;
+    if (!isTrackAudible(track)) return;
+    if (!held && Math.random() * 100 > step.probability * (rhythmRef.current.probability / 100)) return;
 
-  const breakdown = useCallback(() => {
-    setGrid(prev => prev.map((row,ri) => {
-      if (ri===0) return row.map((_,i) => i%4===0);
-      if (ri===1) return row.map((_,i) => i%8===4);
-      if (ri===2) return row.map((_,i) => i===6 || i===14);
-      return row.map((v,i) => i%8===0 ? v : false);
+    writePhaseDiagnostics({
+      triggerCount: (window.__PHASE_DIAGNOSTICS__?.triggerCount || 0) + 1,
+      lastTrigger: track,
+      toneContextState: Tone.context.state,
+    });
+
+    const velocity = mapRange(step.velocity, 0, 127, 0.05, 1);
+    const repeats = Math.max(1, Math.min(4, step.repeat || 1));
+    const repeatWindow = Tone.Time("16n").toSeconds();
+
+    for (let r = 0; r < repeats; r += 1) {
+      const t = time + (repeatWindow / repeats) * r;
+      if (fxRef.current.glitch > 68 && Math.random() < fxRef.current.glitch / 220) continue;
+      applyStepLocks(track, step, t);
+      const sample = SAMPLE_TRACKS.includes(track as SampleTrack) ? samplesRef.current[track as SampleTrack] : undefined;
+      if (sample) {
+        try {
+          sample.player.volume.setValueAtTime(Tone.gainToDb(Math.max(0.05, velocity)), t);
+          sample.player.start(t);
+          continue;
+        } catch {}
+      }
+      if (track === "KICK") rig.kick.triggerAttackRelease("C1", "16n", t, velocity * 0.95);
+      if (track === "HAT") rig.hat.triggerAttackRelease("64n", t, velocity * 0.42);
+      if (track === "PERC") {
+        const notes = ["C2", "F2", "G2", "A#2"];
+        rig.perc.triggerAttackRelease(notes[index % notes.length], "64n", t, velocity * 0.58);
+      }
+      if (track === "BASS") {
+        const gate = bassRef.current.acid > 64 ? "32n" : bassRef.current.energy > 66 ? "8n" : "16n";
+        rig.bass.triggerAttackRelease(step.note || `${bassRef.current.root}1`, gate, t, velocity * 0.86);
+      }
+      if (track === "SYNTH") {
+        const root = step.note || scaleNote(bassRef.current.root, synthRef.current.scale, index, 3);
+        const chord = synthRef.current.tension > 72 ? [root, Tone.Frequency(root).transpose(3).toNote(), Tone.Frequency(root).transpose(10).toNote()] : [root, Tone.Frequency(root).transpose(7).toNote()];
+        rig.synth.triggerAttackRelease(chord, synthRef.current.space > 68 ? "8n" : "16n", t, velocity * 0.34);
+      }
+    }
+  }
+
+  function applyStepLocks(track: TrackId, step: Step, time: number) {
+    const rig = rigRef.current;
+    if (!rig || !step.locks) return;
+    const { tone, space, drive } = step.locks;
+    try {
+      if (track === "PERC") {
+        if (typeof tone === "number") {
+          rig.percFilter.frequency.setValueAtTime(mapRange(tone, 0, 100, 180, 4200), time);
+          rig.percFilter.Q.setValueAtTime(mapRange(tone, 0, 100, 0.6, 7), time);
+        }
+      }
+      if (track === "BASS") {
+        if (typeof tone === "number") rig.bassFilter.frequency.setValueAtTime(mapRange(tone, 0, 100, 140, 3800), time);
+        if (typeof drive === "number") {
+          rig.bassDrive.distortion = mapRange(drive, 0, 100, 0.02, 0.82);
+          rig.bassDrive.wet.setValueAtTime(mapRange(drive, 0, 100, 0.08, 0.7), time);
+        }
+      }
+      if (track === "SYNTH") {
+        if (typeof tone === "number") rig.synthFilter.frequency.setValueAtTime(mapRange(tone, 0, 100, 440, 9800), time);
+        if (typeof drive === "number") {
+          rig.drive.distortion = mapRange(drive, 0, 100, 0.02, 0.62);
+          rig.drive.wet.setValueAtTime(mapRange(drive, 0, 100, 0.04, 0.52), time);
+        }
+      }
+      if (typeof space === "number") {
+        rig.delay.wet.setValueAtTime(mapRange(space, 0, 100, 0.02, 0.64), time);
+        rig.reverb.wet.setValueAtTime(mapRange(space, 0, 100, 0.04, 0.78), time);
+      }
+    } catch {}
+  }
+
+  async function loadStrudelModules() {
+    if (strudelModulesRef.current) return strudelModulesRef.current;
+    if (typeof window === "undefined") return null;
+    const core = await import("@strudel/core");
+    const webaudio = await import("@strudel/webaudio");
+    strudelModulesRef.current = { ...core, ...webaudio } as StrudelModules;
+    return strudelModulesRef.current;
+  }
+
+  function strudelMiniFor(track: TrackId) {
+    const length = lengthsRef.current[track] || STEPS;
+    return patternRef.current[track].slice(0, length).map((step) => (step.active ? (track === "KICK" ? "bd" : track === "HAT" ? "hh" : track === "PERC" ? "rim" : step.note?.toLowerCase() || "d1") : "~")).join(" ");
+  }
+
+  async function playStrudel() {
+    const strudel = await loadStrudelModules();
+    if (!strudel) return;
+    try {
+      strudel.initAudioOnFirstClick?.();
+      const ctx = strudel.getAudioContext?.();
+      const repl = strudel.repl({
+        defaultOutput: strudel.webaudioOutput,
+        getTime: () => ctx?.currentTime ?? 0,
+      });
+      strudelSchedulerRef.current = repl.scheduler;
+      const S = strudel.sound;
+      const N = strudel.note;
+      const Stack = strudel.stack;
+      repl.scheduler.setPattern(Stack(
+        S(strudelMiniFor("KICK")).gain(0.92).distort(mapRange(fxRef.current.distortion, 0, 100, 0, 0.7)),
+        S(strudelMiniFor("HAT")).gain(0.34).hpf(mapRange(xyRef.current.x, 0, 1, 3000, 9000)),
+        S(strudelMiniFor("PERC")).gain(0.38).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.7)),
+        N(strudelMiniFor("BASS")).s("sawtooth").gain(0.48).lpf(mapRange(bassRef.current.energy, 0, 100, 260, 3600)).lpq(mapRange(bassRef.current.acid, 0, 100, 2, 14)),
+        N(strudelMiniFor("SYNTH")).s("sawtooth").gain(0.24).room(mapRange(synthRef.current.space, 0, 100, 0.05, 0.76)).delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.5))
+      ));
+      repl.scheduler.start();
+      setPlaying(true);
+      setStatus("Strudel engine playing");
+    } catch (error) {
+      console.error(error);
+      setStatus("Strudel engine failed");
+    }
+  }
+
+  async function togglePlay() {
+    if (engineMode === "strudel") {
+      if (playing) {
+        stopTone();
+      } else {
+        await playStrudel();
+      }
+      return;
+    }
+
+    if (playing) {
+      stopTone();
+      return;
+    }
+
+    writePhaseDiagnostics({
+      audioStartAttempts: (window.__PHASE_DIAGNOSTICS__?.audioStartAttempts || 0) + 1,
+    });
+    await Tone.start();
+    writePhaseDiagnostics({
+      audioStarted: Tone.context.state === "running",
+      toneContextState: Tone.context.state,
+    });
+    ensureRig();
+    restoreRunningFxAndTexture();
+    applyTransport();
+    Tone.Transport.stop();
+    Tone.Transport.cancel();
+    Tone.Transport.bpm.value = bpm;
+    sequenceRef.current?.dispose();
+    sequenceRef.current = new Tone.Sequence((time, index) => {
+      const phaseOffset = Math.round(mapRange(rhythmRef.current.groove, 0, 100, 0, 3));
+      const stepIndex = (index + phaseOffset) % STEPS;
+      setActiveStep(stepIndex);
+      TRACKS.forEach((track) => {
+        const length = Math.max(1, Math.min(STEPS, lengthsRef.current[track] || STEPS));
+        const laneStep = stepIndex % length;
+        triggerTrack(track, patternRef.current[track][laneStep], laneStep, time);
+      });
+      maybeChaos(stepIndex);
+    }, Array.from({ length: STEPS }, (_, i) => i), "16n");
+    sequenceRef.current.start(0);
+    Tone.Transport.start("+0.04");
+    setPlaying(true);
+    setStatus("Tone scheduler locked");
+  }
+
+  function stopTone() {
+    const now = Tone.now();
+
+    try { strudelSchedulerRef.current?.stop(); } catch {}
+    try { Tone.Transport.stop(); } catch {}
+    try { Tone.Transport.cancel(); } catch {}
+    try { sequenceRef.current?.stop(); } catch {}
+    try { sequenceRef.current?.dispose(); } catch {}
+    sequenceRef.current = null;
+
+    Object.values(samplesRef.current).forEach((entry) => {
+      try { entry?.player.stop(); } catch {}
+    });
+
+    const rig = rigRef.current;
+    if (rig) {
+      try { rig.kick.triggerRelease(now); } catch {}
+      try { rig.hat.triggerRelease(now); } catch {}
+      try { rig.perc.triggerRelease(now); } catch {}
+      try { rig.bass.triggerRelease(now); } catch {}
+      try { rig.synth.releaseAll(now); } catch {}
+
+      try {
+        rig.delay.feedback.cancelScheduledValues(now);
+        rig.delay.feedback.setValueAtTime(0, now);
+      } catch {
+        rig.delay.feedback.value = 0;
+      }
+      try {
+        rig.delay.wet.cancelScheduledValues(now);
+        rig.delay.wet.setValueAtTime(0, now);
+      } catch {
+        rig.delay.wet.value = 0;
+      }
+      try {
+        rig.reverb.wet.cancelScheduledValues(now);
+        rig.reverb.wet.setValueAtTime(0, now);
+      } catch {
+        rig.reverb.wet.value = 0;
+      }
+      try {
+        rig.drive.wet.cancelScheduledValues(now);
+        rig.drive.wet.setValueAtTime(0, now);
+      } catch {
+        rig.drive.wet.value = 0;
+      }
+      try {
+        rig.textureGain.gain.cancelScheduledValues(now);
+        rig.textureGain.gain.setValueAtTime(0, now);
+      } catch {
+        rig.textureGain.gain.value = 0;
+      }
+    }
+
+    setPlaying(false);
+    setActiveStep(-1);
+    setStatus("Transport stopped");
+  }
+
+  function maybeChaos(stepIndex: number) {
+    const chaos = rhythmRef.current.chaos + fxRef.current.glitch * 0.35;
+    if (held || chaos < 18 || Math.random() > chaos / 850) return;
+    setPattern((prev) => ({
+      ...prev,
+      PERC: prev.PERC.map((step, i) => (i === stepIndex ? { ...step, active: !step.active } : step)),
+      HAT: prev.HAT.map((step, i) => (i === (stepIndex + 2) % STEPS && Math.random() < 0.35 ? { ...step, active: !step.active } : step)),
     }));
-  }, []);
+  }
 
-  const glitch = useCallback(() => {
-    if (glitchTimer.current) clearTimeout(glitchTimer.current);
-    liveRef.current.glitch = true; setGlitching(true);
-    const ri = rand(4);
-    const ratchetHat = [[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],[1,0,1,1,0,1,1,0,1,1,0,1,1,0,1,1],[1,1,0,1,1,0,1,1,0,1,1,0,1,1,0,1],[1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0]];
-    const ratchetPerc = [[1,0,1,0,1,0,0,0,1,0,1,0,1,0,0,0],[0,1,0,1,0,0,1,0,0,1,0,1,0,0,1,0],[1,1,0,0,1,1,0,0,1,1,0,0,1,1,0,0],[0,0,1,1,0,0,1,1,0,0,1,1,0,0,1,1]];
-    setGrid(prev => prev.map((row,r) => {
-      if (r===1) return ratchetHat[ri].map(v => !!v);
-      if (r===2) return ratchetPerc[ri].map(v => !!v);
-      if (r===0) return row.map((v,i) => i%2===0 ? v : (i%4===1));
-      return row;
+  function toggleStep(track: TrackId, index: number) {
+    setPattern((prev) => ({
+      ...prev,
+      [track]: prev[track].map((step, i) => (i === index ? { ...step, active: !step.active } : step)),
     }));
-    if (playing) { try { schedulerRef.current?.setPattern(buildPattern()); } catch {} }
-    const barMs = (60000 / liveRef.current.bpm) * 4 * 2;
-    glitchTimer.current = setTimeout(() => {
-      liveRef.current.glitch = false; setGlitching(false);
-      if (playing) rebuildPattern();
-    }, barMs);
-  }, [playing, buildPattern, rebuildPattern]);
+  }
 
-  const randomChords = useCallback(() => {
-    const pool = CHORDS_POOL as readonly string[];
-    setChords(Array.from({length:5}, () => pool[rand(pool.length)]));
-  }, []);
+  function cycleStep(track: TrackId, index: number, event: React.MouseEvent) {
+    event.preventDefault();
+    setPattern((prev) => ({
+      ...prev,
+      [track]: prev[track].map((step, i) => {
+        if (i !== index) return step;
+        if (event.shiftKey) return { ...step, velocity: step.velocity > 72 ? 56 : 112, active: true };
+        return { ...step, repeat: step.repeat >= 4 ? 1 : step.repeat + 1, probability: step.probability <= 50 ? 100 : step.probability - 25, active: true };
+      }),
+    }));
+  }
 
-  // RANDOMIZE STEPS — musical, uses groove pool for all 5 tracks
-  const randomizeSteps = useCallback(() => {
-    const ki = rand(GROOVE_KICK.length), hi = rand(GROOVE_HAT.length);
-    const pi = rand(GROOVE_PERC.length), bi = rand(GROOVE_BASS.length);
-    const si = rand(GROOVE_SYNTH.length);
-    setGrid([
-      GROOVE_KICK[ki].map(v => !!v),
-      GROOVE_HAT[hi].map(v => !!v),
-      GROOVE_PERC[pi].map(v => !!v),
-      GROOVE_BASS[bi].map(v => !!v),
-      GROOVE_SYNTH[si].map(v => !!v),
-    ]);
-  }, []);
+  function nudgeNote(track: "BASS" | "SYNTH", index: number, direction: number) {
+    setPattern((prev) => ({
+      ...prev,
+      [track]: prev[track].map((step, i) => i === index ? {
+        ...step,
+        active: true,
+        note: scaleNote(bass.root, synth.scale, i + direction + (track === "SYNTH" ? Math.round(synth.tension / 24) : Math.round(bass.mutation / 32)), track === "BASS" ? 1 : 3),
+      } : step),
+    }));
+  }
 
-  const resetAll = useCallback(() => {
-    if (glitchTimer.current) clearTimeout(glitchTimer.current);
-    if (rebuildTimer.current) clearTimeout(rebuildTimer.current);
-    liveRef.current.glitch = false; setGlitching(false);
-    setGrid(origGrid.current.map(r => [...r]));
-    setChords(INIT_CHORDS); setMacros(INIT_MACROS.map(m => ({...m}))); setVolumes([...INIT_VOLUMES]);
-    setSoloMute({}); setFxValues({...INIT_FX}); setSynthMod({...INIT_SYNTH});
-    setBassMod({...INIT_BASS}); setPercMod({...INIT_PERC}); setXyPos({x:0.5, y:0.5});
-  }, []);
+  function regenerate(nextRhythm = rhythm, nextBass = bass, nextSynth = synth) {
+    setPattern(createPattern(nextRhythm, nextBass, nextSynth));
+    setStatus("Pattern regenerated");
+  }
 
-  // XY Pad — full pointer capture for real performance feel
-  const handleXyDown = useCallback((e: React.PointerEvent) => {
-    if (!xyPadRef.current) return;
-    try { xyPadRef.current.setPointerCapture(e.pointerId); pointerCapRef.current = e.pointerId; } catch {}
-    const r = xyPadRef.current.getBoundingClientRect();
-    setXyPos({ x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) });
-  }, []);
-  const handleXyMove = useCallback((e: React.PointerEvent) => {
-    if (!xyPadRef.current || !(e.buttons & 1)) return;
-    const r = xyPadRef.current.getBoundingClientRect();
-    setXyPos({ x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) });
-  }, []);
-  const handleXyUp = useCallback((e: React.PointerEvent) => {
-    if (!xyPadRef.current) return;
-    try { if (pointerCapRef.current !== null) { xyPadRef.current.releasePointerCapture(pointerCapRef.current); pointerCapRef.current = null; } } catch {}
-  }, []);
+  function updateEngine<T extends object>(setter: React.Dispatch<React.SetStateAction<T>>, key: keyof T, value: T[keyof T]) {
+    setter((prev) => ({ ...prev, [key]: value }));
+  }
 
-  const liveCodeBasscut = useMemo(() => Math.round(55 + (bassMod.cutoff/100)*840), [bassMod.cutoff]);
-  const liveCodeRoom    = useMemo(() => (macros[4].value/100*0.7+0.15).toFixed(2), [macros]);
-  const liveCodePercLpf = useMemo(() => Math.round(400+(percMod.tone/100)*8500), [percMod.tone]);
+  function setTrackLength(track: TrackId, value: number) {
+    const length = Math.max(1, Math.min(STEPS, Math.round(value)));
+    setLengths((prev) => ({ ...prev, [track]: length }));
+    setEuclidean((prev) => ({
+      ...prev,
+      [track]: {
+        ...prev[track],
+        hits: Math.min(prev[track].hits, length),
+        rotate: prev[track].rotate % length,
+      },
+    }));
+  }
+
+  function applyEuclidean(track: TrackId, lane = euclideanRef.current[track]) {
+    const length = lengthsRef.current[track] || STEPS;
+    const hits = Math.max(0, Math.min(length, lane.hits));
+    const rotate = Math.max(0, Math.min(length - 1, lane.rotate));
+    const hitsPattern = euclid(length, hits, rotate);
+    setPattern((prev) => ({
+      ...prev,
+      [track]: prev[track].map((step, index) => ({
+        ...step,
+        active: index < length ? hitsPattern[index] : false,
+      })),
+    }));
+  }
+
+  function updateEuclidean(track: TrackId, patch: Partial<EuclideanLane>) {
+    setEuclidean((prev) => {
+      const length = lengthsRef.current[track] || STEPS;
+      const nextLane = {
+        ...prev[track],
+        ...patch,
+      };
+      nextLane.hits = Math.max(0, Math.min(length, Math.round(nextLane.hits)));
+      nextLane.rotate = Math.max(0, Math.min(length - 1, Math.round(nextLane.rotate)));
+      const next = { ...prev, [track]: nextLane };
+      euclideanRef.current = next;
+      if (nextLane.enabled) setTimeout(() => applyEuclidean(track, nextLane), 0);
+      return next;
+    });
+  }
+
+  function cycleStepLock(track: TrackId, index: number) {
+    setPattern((prev) => ({
+      ...prev,
+      [track]: prev[track].map((step, i) => {
+        if (i !== index) return step;
+        if (step.locks?.tone !== undefined && step.locks.space !== undefined && step.locks.drive !== undefined) {
+          return { ...step, locks: undefined };
+        }
+        if (step.locks?.tone !== undefined && step.locks.space !== undefined) {
+          return { ...step, active: true, locks: { ...step.locks, drive: Math.round(mapRange(Math.random(), 0, 1, 24, 84)) } };
+        }
+        if (step.locks?.tone !== undefined) {
+          return { ...step, active: true, locks: { ...step.locks, space: Math.round(mapRange(Math.random(), 0, 1, 18, 92)) } };
+        }
+        return { ...step, active: true, locks: { tone: Math.round(mapRange(Math.random(), 0, 1, 12, 96)) } };
+      }),
+    }));
+  }
+
+  function randomizeLocks() {
+    setPattern((prev) => Object.fromEntries(TRACKS.map((track) => [track, prev[track].map((step, index) => {
+      if (!step.active || !["PERC", "BASS", "SYNTH"].includes(track) || index >= lengthsRef.current[track]) return step;
+      if (Math.random() > 0.34) return { ...step, locks: undefined };
+      return {
+        ...step,
+        locks: {
+          tone: Math.round(mapRange(Math.random(), 0, 1, 8, 96)),
+          space: Math.round(mapRange(Math.random(), 0, 1, 0, 94)),
+          drive: Math.round(mapRange(Math.random(), 0, 1, 0, 86)),
+        },
+      };
+    })])) as Record<TrackId, Step[]>);
+  }
+
+  function clearLocks() {
+    setPattern((prev) => Object.fromEntries(TRACKS.map((track) => [track, prev[track].map((step) => ({ ...step, locks: undefined }))])) as Record<TrackId, Step[]>);
+  }
+
+  function toggleMute(track: TrackId) {
+    setMutes((prev) => ({ ...prev, [track]: !prev[track] }));
+  }
+
+  function toggleSolo(track: TrackId) {
+    setSolos((prev) => ({ ...prev, [track]: !prev[track] }));
+  }
+
+  function persistPresets(next: PresetData[]) {
+    setPresets(next);
+    window.localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  function savePreset() {
+    const id = selectedPresetId || (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}`);
+    const name = presetName.trim() || "PHASE MEMORY";
+    const preset: PresetData = {
+      id,
+      name,
+      createdAt: Date.now(),
+      pattern,
+      bpm,
+      engineMode,
+      rhythm,
+      bass,
+      synth,
+      texture,
+      fx,
+      xy,
+      lengths,
+      euclidean,
+      volumes,
+      mutes,
+      solos,
+      sampleNames,
+    };
+    const next = presets.some((item) => item.id === id)
+      ? presets.map((item) => item.id === id ? preset : item)
+      : [preset, ...presets];
+    persistPresets(next);
+    setSelectedPresetId(id);
+    setPresetName(name);
+    setStatus(`Saved ${name}`);
+  }
+
+  function loadPreset(id = selectedPresetId) {
+    const preset = presets.find((item) => item.id === id);
+    if (!preset) {
+      setStatus("Select a memory first");
+      return;
+    }
+    setPattern(preset.pattern);
+    setBpm(preset.bpm);
+    setEngineMode(preset.engineMode || "tone");
+    setRhythm(preset.rhythm);
+    setBass(preset.bass);
+    setSynth(preset.synth);
+    setTexture(preset.texture);
+    setFx(preset.fx);
+    setXy(preset.xy);
+    setLengths(preset.lengths || DEFAULT_LENGTHS);
+    setEuclidean(preset.euclidean || DEFAULT_EUCLIDEAN);
+    setVolumes(preset.volumes || DEFAULT_VOLUMES);
+    setMutes(preset.mutes || DEFAULT_BOOLEAN_TRACKS);
+    setSolos(preset.solos || DEFAULT_BOOLEAN_TRACKS);
+    setSampleNames(preset.sampleNames || {});
+    setSelectedPresetId(preset.id);
+    setPresetName(preset.name);
+    setStatus(`Loaded ${preset.name}`);
+  }
+
+  function deletePreset() {
+    const next = presets.filter((item) => item.id !== selectedPresetId);
+    persistPresets(next);
+    setSelectedPresetId(next[0]?.id || "");
+    setPresetName(next[0]?.name || "PHASE MEMORY 01");
+    setStatus("Memory deleted");
+  }
+
+  function openSample(track: SampleTrack) {
+    pendingSampleTrackRef.current = track;
+    fileInputRef.current?.click();
+  }
+
+  function isAudioFile(file: File) {
+    return file.type.startsWith("audio/") || /\.(wav|aif|aiff|mp3|m4a|ogg|flac)$/i.test(file.name);
+  }
+
+  async function loadSample(track: SampleTrack, file: File) {
+    if (!isAudioFile(file)) return;
+    await Tone.start();
+    const rig = ensureRig();
+    const previous = samplesRef.current[track];
+    if (previous) {
+      try { previous.player.dispose(); } catch {}
+      URL.revokeObjectURL(previous.url);
+    }
+    const url = URL.createObjectURL(file);
+    const player = new Tone.Player({ url, loop: false }).connect(rig.trackVolumes[track]);
+    await Tone.loaded();
+    samplesRef.current[track] = { player, url, name: file.name };
+    setSampleNames((prev) => ({ ...prev, [track]: file.name }));
+    setStatus(`${track} sample loaded`);
+  }
+
+  async function handleSampleChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    const track = pendingSampleTrackRef.current;
+    if (file && track) await loadSample(track, file);
+    event.target.value = "";
+  }
+
+  async function handleSampleDrop(event: React.DragEvent<HTMLElement>, track: SampleTrack) {
+    event.preventDefault();
+    setDragOverTrack(null);
+    const file = event.dataTransfer.files?.[0];
+    if (file) await loadSample(track, file);
+  }
+
+  function removeSample(track: SampleTrack) {
+    const current = samplesRef.current[track];
+    if (current) {
+      try { current.player.dispose(); } catch {}
+      URL.revokeObjectURL(current.url);
+      delete samplesRef.current[track];
+    }
+    setSampleNames((prev) => {
+      const next = { ...prev };
+      delete next[track];
+      return next;
+    });
+    setStatus(`${track} sample removed`);
+  }
+
+  function perform(action: PerformanceAction) {
+    writePhaseDiagnostics({ lastPerformanceAction: action });
+
+    if (action === "INIT") {
+      setRhythm(DEFAULT_RHYTHM);
+      setBass(DEFAULT_BASS);
+      setSynth(DEFAULT_SYNTH);
+      setTexture(DEFAULT_TEXTURE);
+      setFx(DEFAULT_FX);
+      setHeld(false);
+      setXy({ x: 0.56, y: 0.42, active: false, held: true });
+      setPattern(createPattern());
+      setStatus("INIT recalled");
+      return;
+    }
+
+    if (action === "HOLD") {
+      setHeld((next) => !next);
+      setStatus(!held ? "HOLD engaged" : "HOLD released");
+      return;
+    }
+
+    if (action === "BUILD") {
+      const nextRhythm = { ...rhythm, density: clamp(rhythm.density + 14), probability: clamp(rhythm.probability + 8), repeat: clamp(rhythm.repeat + 12) };
+      const nextBass = { ...bass, energy: clamp(bass.energy + 12), drive: clamp(bass.drive + 8) };
+      setRhythm(nextRhythm);
+      setBass(nextBass);
+      regenerate(nextRhythm, nextBass, synth);
+    }
+
+    if (action === "STRIP") {
+      setPattern((prev) => ({
+        ...prev,
+        HAT: prev.HAT.map((step, i) => ({ ...step, active: i % 4 === 1 })),
+        PERC: prev.PERC.map((step, i) => ({ ...step, active: i === 6 || i === 13 })),
+        SYNTH: prev.SYNTH.map((step, i) => ({ ...step, active: i % 8 === 0 })),
+      }));
+      setStatus("Arrangement stripped");
+    }
+
+    if (action === "MORPH") {
+      const nextBass = { ...bass, mutation: clamp(bass.mutation + 22), acid: clamp(bass.acid + 18), root: pick(NOTE_NAMES) };
+      const nextSynth = { ...synth, scale: pick(Object.keys(SCALE_INTERVALS) as ScaleName[]), mood: pick(["noir", "hypnotic", "acid", "ritual", "aerial"] as const), tension: clamp(synth.tension + 12) };
+      setBass(nextBass);
+      setSynth(nextSynth);
+      regenerate(rhythm, nextBass, nextSynth);
+    }
+
+    if (action === "SHIFT") {
+      setPattern((prev) => Object.fromEntries(TRACKS.map((track, row) => {
+        const amount = row + 1;
+        const lane = prev[track];
+        return [track, lane.map((_, i) => lane[(i - amount + STEPS) % STEPS])];
+      })) as Record<TrackId, Step[]>);
+      setStatus("Sequence shifted");
+    }
+
+    if (action === "FRACTURE") {
+      setPattern((prev) => ({
+        ...prev,
+        HAT: prev.HAT.map((step, i) => ({ ...step, active: step.active || (i % 2 === 1 && Math.random() < 0.45), repeat: pick([1, 2, 3]) })),
+        PERC: prev.PERC.map((step) => ({ ...step, active: Math.random() < 0.5 ? !step.active : step.active, repeat: pick([1, 1, 2, 4]) })),
+      }));
+      setFx((prev) => ({ ...prev, glitch: clamp(prev.glitch + 24), feedback: clamp(prev.feedback + 14) }));
+      setStatus("FRACTURE injected");
+    }
+
+    if (action === "BURST") {
+      setPattern((prev) => ({
+        ...prev,
+        KICK: prev.KICK.map((step, i) => ({ ...step, active: step.active || i === 14 })),
+        BASS: prev.BASS.map((step, i) => ({ ...step, active: step.active || [3, 7, 11, 15].includes(i), repeat: i % 4 === 3 ? 2 : step.repeat })),
+      }));
+      setFx((prev) => ({ ...prev, delay: clamp(prev.delay + 18), distortion: clamp(prev.distortion + 12) }));
+      setStatus("BURST armed");
+    }
+  }
+
+  function handlePad(e: React.PointerEvent<HTMLElement>, active = true) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = clamp01((e.clientX - rect.left) / rect.width);
+    const y = clamp01(1 - (e.clientY - rect.top) / rect.height);
+    writePhaseDiagnostics({
+      xyMoves: (window.__PHASE_DIAGNOSTICS__?.xyMoves || 0) + 1,
+      lastXY: { x, y },
+    });
+    setXy((prev) => ({ ...prev, x, y, active }));
+    setSynth((prev) => ({ ...prev, brightness: Math.round(mapRange(x, 0, 1, 12, 96)), space: Math.round(mapRange(y, 0, 1, 8, 96)) }));
+    setFx((prev) => ({ ...prev, delay: Math.round(mapRange(y, 0, 1, 8, 82)), reverb: Math.round(mapRange(y, 0, 1, 10, 94)) }));
+  }
+
+  function releasePad(e: React.PointerEvent<HTMLElement>) {
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    setXy((prev) => prev.held ? { ...prev, active: false } : { ...prev, x: 0.5, y: 0.35, active: false });
+  }
 
   return (
-    <main style={{
-      minHeight:"100vh",
-      background:"radial-gradient(ellipse 80% 50% at 50% -10%,rgba(139,92,246,.18) 0%,transparent 60%),radial-gradient(ellipse 60% 40% at 90% 50%,rgba(34,211,238,.08) 0%,transparent 50%),radial-gradient(ellipse 60% 60% at 10% 80%,rgba(236,72,153,.07) 0%,transparent 50%),#020409",
-      color:"white", fontFamily:"'DM Mono','IBM Plex Mono','Fira Code',monospace",
-      display:"flex", flexDirection:"column", overflow:"hidden", height:"100vh",
-    }}>
+    <main className="phase-shell">
+      <style>{`
+        .engine-card {
+          background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.018)),
+            radial-gradient(circle at 50% -18%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 48%),
+            rgba(4, 5, 12, 0.86);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.09),
+            inset 0 -1px 0 rgba(0, 0, 0, 0.62),
+            0 14px 34px rgba(0, 0, 0, 0.3);
+        }
 
-      {/* ── HEADER ── */}
-      <header style={{
-        display:"flex", alignItems:"center", justifyContent:"space-between",
-        padding:"0 28px", height:72,
-        borderBottom:"1px solid rgba(255,255,255,.06)",
-        background:"rgba(2,4,9,.92)", backdropFilter:"blur(40px)",
-        flexShrink:0, zIndex:100,
-      }}>
-        <div style={{display:"flex", alignItems:"center", gap:16}}>
-          <motion.div
-            animate={{textShadow: playing ? ["0 0 20px #8b5cf6","0 0 40px #22d3ee","0 0 20px #8b5cf6"] : "0 0 0px transparent"}}
-            transition={{duration:2, repeat:Infinity}}
-            style={{fontSize:26, fontWeight:200, letterSpacing:12, color:"#fff"}}
-          >PHASE</motion.div>
-          <div style={{width:1, height:24, background:"rgba(255,255,255,.1)"}}/>
-          <span style={{fontSize:9, letterSpacing:3, opacity:.35, textTransform:"uppercase"}}>Gen Instrument v2</span>
-          {glitching && (
-            <motion.div animate={{opacity:[1,0,1], color:["#a3e635","#ec4899","#a3e635"]}} transition={{duration:.16, repeat:Infinity}}
-              style={{fontSize:10, letterSpacing:3, fontWeight:700}}>⚡ GLITCH</motion.div>
-          )}
-        </div>
+        .engine-card .engine-controls {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 12px;
+          align-items: stretch;
+        }
 
-        <div style={{display:"flex", alignItems:"center", gap:10}}>
-          <div style={{display:"flex", alignItems:"center", gap:6, padding:"6px 12px", borderRadius:10, border:"1px solid rgba(255,255,255,.08)", background:"rgba(255,255,255,.03)"}}>
-            <div style={{textAlign:"center"}}>
-              <div style={{fontSize:8, letterSpacing:2, opacity:.45, marginBottom:1}}>BPM</div>
-              <div style={{fontSize:18, fontWeight:600, letterSpacing:1, lineHeight:1}}>{bpm}</div>
+        .rotary-knob {
+          position: relative;
+          min-width: 0;
+          min-height: 152px;
+          display: grid;
+          grid-template-rows: auto 1fr auto;
+          gap: 7px;
+          justify-items: center;
+          align-items: center;
+          padding: 12px 10px 10px;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 7px;
+          background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.018)),
+            radial-gradient(circle at 50% -20%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 58%),
+            rgba(0, 0, 0, 0.3);
+          box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.08),
+            inset 0 -16px 28px rgba(0, 0, 0, 0.28);
+          cursor: ns-resize;
+          touch-action: none;
+          user-select: none;
+          -webkit-user-select: none;
+          outline: none;
+          overflow: hidden;
+        }
+
+        .rotary-knob::before {
+          content: "";
+          position: absolute;
+          inset: 8px;
+          border-radius: 6px;
+          background:
+            radial-gradient(circle at 50% 44%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(0, 0, 0, 0.04));
+          opacity: 0.9;
+          pointer-events: none;
+        }
+
+        .rotary-knob::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          border-radius: inherit;
+          box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+          pointer-events: none;
+        }
+
+        .rotary-knob:hover,
+        .rotary-knob:focus-visible {
+          border-color: color-mix(in srgb, var(--accent) 54%, rgba(255, 255, 255, 0.16));
+          box-shadow:
+            0 0 22px color-mix(in srgb, var(--accent) 20%, transparent),
+            inset 0 1px 0 rgba(255, 255, 255, 0.1),
+            inset 0 -16px 28px rgba(0, 0, 0, 0.28);
+        }
+
+        .rotary-knob.disabled {
+          opacity: 0.48;
+          cursor: not-allowed;
+        }
+
+        .rotary-label,
+        .rotary-face,
+        .rotary-value {
+          position: relative;
+          z-index: 1;
+        }
+
+        .rotary-label {
+          width: 100%;
+          color: rgba(237, 248, 255, 0.72);
+          font-size: 10px;
+          line-height: 1.2;
+          text-transform: uppercase;
+          letter-spacing: 0.12em;
+          text-align: center;
+          white-space: normal;
+          overflow-wrap: anywhere;
+        }
+
+        .rotary-face {
+          width: min(92px, 100%);
+          aspect-ratio: 1;
+          filter: drop-shadow(0 0 12px color-mix(in srgb, var(--accent) 20%, transparent));
+        }
+
+        .rotary-ring-track {
+          fill: none;
+          stroke: rgba(255, 255, 255, 0.13);
+          stroke-width: 6;
+          stroke-linecap: round;
+        }
+
+        .rotary-ring-value {
+          fill: none;
+          stroke: var(--accent);
+          stroke-width: 6;
+          stroke-linecap: round;
+          filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 78%, transparent));
+        }
+
+        .rotary-body {
+          fill: url(#phaseKnobBody);
+          stroke: rgba(255, 255, 255, 0.16);
+          stroke-width: 1.2;
+        }
+
+        .rotary-indicator {
+          stroke: #edf8ff;
+          stroke-width: 3.4;
+          stroke-linecap: round;
+          filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent) 82%, transparent));
+        }
+
+        .rotary-dot {
+          fill: var(--accent);
+          filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 78%, transparent));
+        }
+
+        .rotary-value {
+          min-width: 48px;
+          padding: 4px 8px;
+          border: 1px solid rgba(255, 255, 255, 0.095);
+          border-radius: 5px;
+          color: #edf8ff;
+          background: rgba(0, 0, 0, 0.32);
+          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+          font-size: 13px;
+          line-height: 1;
+          text-align: center;
+          font-variant-numeric: tabular-nums;
+          text-shadow: 0 0 12px color-mix(in srgb, var(--accent) 26%, transparent);
+        }
+
+        .engine-card .macro-select {
+          min-height: 72px;
+          align-content: center;
+          border-radius: 7px;
+          background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.065), rgba(255, 255, 255, 0.018)),
+            rgba(0, 0, 0, 0.26);
+        }
+
+        .phase-version {
+          display: inline-block;
+          margin-top: 5px;
+          padding: 3px 7px;
+          border: 1px solid rgba(120, 255, 229, 0.28);
+          border-radius: 999px;
+          color: #78ffe5;
+          background: rgba(0, 0, 0, 0.24);
+          font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+          font-size: 10px;
+          letter-spacing: 0.06em;
+        }
+
+        @media (max-width: 1180px) {
+          .engine-card .engine-controls {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+          }
+        }
+
+        @media (max-width: 760px) {
+          .engine-card .engine-controls {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .rotary-knob {
+            min-height: 142px;
+            padding: 11px 8px 10px;
+          }
+
+          .rotary-face {
+            width: min(86px, 100%);
+          }
+        }
+      `}</style>
+      <section className="phase-instrument">
+        <header className="phase-top">
+          <div className="phase-brand">
+            <span className="phase-mark"><Disc3 size={24} /></span>
+            <div>
+              <h1>PHASE TEST 999</h1>
+              <p>Hybrid generative techno instrument</p>
+              <span className="phase-version">PHASE CODEX v0.6</span>
             </div>
-            <div style={{display:"flex", flexDirection:"column", gap:2}}>
-              <button onClick={() => setBpm(b => Math.min(200,b+1))} style={microBtn()}>▲</button>
-              <button onClick={() => setBpm(b => Math.max(60, b-1))} style={microBtn()}>▼</button>
+          </div>
+
+          <div className="phase-transport" aria-label="Transport">
+            <button className={`transport-play ${playing ? "on" : ""}`} onClick={togglePlay} aria-label={playing ? "Stop playback" : "Start playback"}>
+              {playing ? <Pause size={18} /> : <Play size={18} />}
+            </button>
+            <button className="transport-stop" onClick={stopTone} aria-label="Stop">
+              <Square size={16} />
+            </button>
+            <label className="tempo">
+              <span>BPM</span>
+              <input value={bpm} min={88} max={176} type="number" onChange={(event) => setBpm(clamp(Number(event.target.value), 88, 176))} />
+            </label>
+            <div className="engine-switch">
+              {(["tone", "strudel"] as EngineMode[]).map((mode) => (
+                <button key={mode} className={engineMode === mode ? "selected" : ""} onClick={() => { setEngineMode(mode); setStatus(`${mode.toUpperCase()} engine selected`); }}>
+                  {mode}
+                </button>
+              ))}
             </div>
           </div>
-          <div style={{padding:"6px 14px", borderRadius:10, border:"1px solid rgba(255,255,255,.08)", background:"rgba(255,255,255,.03)", textAlign:"center"}}>
-            <div style={{fontSize:8, letterSpacing:2, opacity:.45, marginBottom:1}}>KEY</div>
-            <div style={{fontSize:13, fontWeight:600, letterSpacing:1}}>D MIN</div>
+
+          <div className="phase-meter">
+            <span>HEAT {engineReadout.heat}</span>
+            <span>SPACE {engineReadout.space}</span>
+            <span>{status}</span>
           </div>
-          <div style={{width:1, height:36, background:"rgba(255,255,255,.07)", margin:"0 4px"}}/>
-          <motion.button onClick={playing ? stop : play}
-            whileHover={{scale:1.06}} whileTap={{scale:0.94}}
-            animate={{boxShadow: playing ? ["0 0 0 0 rgba(139,92,246,.5)","0 0 0 14px rgba(139,92,246,.0)"] : "0 0 20px rgba(139,92,246,.2)"}}
-            transition={playing ? {duration:1.2, repeat:Infinity} : {}}
-            style={{width:48, height:48, borderRadius:"50%", border:"2px solid rgba(139,92,246,.8)",
-              background: playing ? "linear-gradient(135deg,rgba(139,92,246,.5),rgba(34,211,238,.25))" : "rgba(139,92,246,.14)",
-              color:"white", fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center"}}
-          >{playing ? "■" : "▶"}</motion.button>
-          <motion.button onClick={() => setRecActive(r => !r)}
-            animate={{backgroundColor: recActive ? ["rgba(236,72,153,.65)","rgba(236,72,153,.2)"] : "rgba(255,255,255,.03)"}}
-            transition={{duration:.8, repeat: recActive ? Infinity : 0}}
-            style={{width:38, height:38, borderRadius:"50%", border:"1px solid rgba(236,72,153,.5)", cursor:"pointer", color:"#ec4899", fontSize:11, display:"flex", alignItems:"center", justifyContent:"center"}}
-          >⏺</motion.button>
-          <div style={{padding:"6px 14px", borderRadius:10, border:"1px solid rgba(255,255,255,.08)", background:"rgba(255,255,255,.03)", minWidth:76, textAlign:"center"}}>
-            <motion.div animate={{color: playing ? ["#22d3ee","#8b5cf6","#22d3ee"] : status==="ERROR" ? "#ef4444" : "#ffffff33"}} transition={{duration:2, repeat:Infinity}}
-              style={{fontSize:10, letterSpacing:2, fontWeight:700}}>{status}</motion.div>
-          </div>
-        </div>
+        </header>
 
-        <div style={{display:"flex", gap:8}}>
-          <button title="Export state as JSON" onClick={() => {
-            const state = { grid, chords, macros, bassMod, synthMod, percMod, fxValues, bpm };
-            const blob = new Blob([JSON.stringify(state,null,2)], {type:"application/json"});
-            const url = URL.createObjectURL(blob); const a = document.createElement("a");
-            a.href=url; a.download="phase-preset.json"; a.click(); URL.revokeObjectURL(url);
-          }} style={{padding:"7px 14px", borderRadius:9, border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.7)", fontSize:10, cursor:"pointer", letterSpacing:1}}>SAVE</button>
-          <button title="Copy session info" onClick={() => {
-            navigator.clipboard?.writeText(`PHASE | BPM: ${bpm} | Chords: ${chords.join(", ")} | Key: D MIN`).catch(()=>{});
-          }} style={{padding:"7px 14px", borderRadius:9, border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.7)", fontSize:10, cursor:"pointer", letterSpacing:1}}>SHARE</button>
-          <button title="Reset all" onClick={resetAll} style={{padding:"7px 14px", borderRadius:9, border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.7)", fontSize:10, cursor:"pointer", letterSpacing:1}}>⚙</button>
-        </div>
-      </header>
-
-      {/* ── BODY ── */}
-      <div style={{flex:1, display:"grid", gridTemplateColumns:"272px 1fr 292px", overflow:"hidden", minHeight:0}}>
-
-        {/* LEFT PANEL */}
-        <aside style={{borderRight:"1px solid rgba(255,255,255,.05)", padding:"16px 14px", display:"flex", flexDirection:"column", gap:9, overflowY:"auto", background:"rgba(0,0,0,.3)"}}>
-          <Lbl>✦ MACRO ENGINE</Lbl>
-          {macros.map((m,i) => (
-            <MacroBar key={m.label} label={m.label} value={m.value} color={m.color}
-              onChange={v => setMacros(p => p.map((x,xi) => xi===i ? {...x,value:v} : x))}/>
-          ))}
-
-          <HR/><Lbl>GLOBAL FX</Lbl>
-          <div style={{display:"flex", gap:10, justifyContent:"space-between"}}>
-            <FxKnob label="REVERB" value={fxValues.reverb} color="#8b5cf6" onChange={v=>setFxValues(p=>({...p,reverb:v}))}/>
-            <FxKnob label="DELAY"  value={fxValues.delay}  color="#22d3ee" onChange={v=>setFxValues(p=>({...p,delay:v}))}/>
-            <FxKnob label="DRIVE"  value={fxValues.drive}  color="#ec4899" onChange={v=>setFxValues(p=>({...p,drive:v}))}/>
-          </div>
-
-          <HR/><Lbl>PERC DESIGNER</Lbl>
-          <div style={{display:"flex", flexWrap:"wrap", gap:4, marginBottom:4}}>
-            {PERC_TYPES.map(t => (
-              <button key={t} onClick={()=>setPercMod(p=>({...p,type:t}))} style={{
-                padding:"4px 7px", borderRadius:6, fontSize:8, cursor:"pointer", fontFamily:"inherit",
-                textTransform:"uppercase", letterSpacing:1,
-                border:`1px solid ${percMod.type===t?"#8b5cf6":"rgba(255,255,255,.08)"}`,
-                background: percMod.type===t?"rgba(139,92,246,.25)":"rgba(255,255,255,.03)",
-                color: percMod.type===t?"#fff":"rgba(255,255,255,.45)", transition:"all .15s",
-              }}>{t}</button>
-            ))}
-          </div>
-          <Slider label="TONE"  value={percMod.tone}  color="#8b5cf6" onChange={v=>setPercMod(p=>({...p,tone:v}))}/>
-          <Slider label="SNAP"  value={percMod.snap}  color="#22d3ee" onChange={v=>setPercMod(p=>({...p,snap:v}))}/>
-          <Slider label="SPACE" value={percMod.space} color="#ec4899" onChange={v=>setPercMod(p=>({...p,space:v}))}/>
-          <button onClick={()=>setPercMod({ tone:rand(100), snap:rand(100), space:rand(60), type:PERC_TYPES[rand(PERC_TYPES.length)] })}
-            style={{...sBtn("#8b5cf6"), fontSize:8, padding:"5px 0"}}>↻ RANDOMIZE PERC</button>
-
-          {/* ── BASS MOD — knobs ── */}
-          <HR/>
-          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-            <Lbl>BASS MOD</Lbl>
-            <button onClick={()=>setBassMod({cutoff:rand(100),punch:rand(100),drive:rand(70),decay:rand(100),acidRes:rand(100)})}
-              style={{fontSize:7, padding:"2px 7px", borderRadius:5, border:"1px solid rgba(163,230,53,.25)", background:"rgba(163,230,53,.06)", color:"#a3e635", cursor:"pointer", fontFamily:"inherit", letterSpacing:1}}>RND</button>
-          </div>
-          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
-            <Knob label="CUTOFF"   value={bassMod.cutoff}  color="#a3e635" onChange={v=>setBassMod(p=>({...p,cutoff:v}))}/>
-            <Knob label="PUNCH"    value={bassMod.punch}   color="#f97316" onChange={v=>setBassMod(p=>({...p,punch:v}))}/>
-            <Knob label="DRIVE"    value={bassMod.drive}   color="#ec4899" onChange={v=>setBassMod(p=>({...p,drive:v}))}/>
-            <Knob label="DECAY"    value={bassMod.decay}   color="#38bdf8" onChange={v=>setBassMod(p=>({...p,decay:v}))}/>
-            <Knob label="ACID RES" value={bassMod.acidRes} color="#a3e635" onChange={v=>setBassMod(p=>({...p,acidRes:v}))}/>
-          </div>
-
-          {/* ── SYNTH MOD — knobs ── */}
-          <HR/>
-          <div style={{display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-            <Lbl>SYNTH MOD</Lbl>
-            <button onClick={()=>setSynthMod({cutoff:rand(100),motion:rand(100),detune:rand(80),delay:rand(80),space:rand(80),width:rand(100)})}
-              style={{fontSize:7, padding:"2px 7px", borderRadius:5, border:"1px solid rgba(34,211,238,.25)", background:"rgba(34,211,238,.06)", color:"#22d3ee", cursor:"pointer", fontFamily:"inherit", letterSpacing:1}}>RND</button>
-          </div>
-          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:8}}>
-            <Knob label="CUTOFF" value={synthMod.cutoff} color="#22d3ee" onChange={v=>setSynthMod(p=>({...p,cutoff:v}))}/>
-            <Knob label="MOTION" value={synthMod.motion} color="#8b5cf6" onChange={v=>setSynthMod(p=>({...p,motion:v}))}/>
-            <Knob label="DETUNE" value={synthMod.detune} color="#f472b6" onChange={v=>setSynthMod(p=>({...p,detune:v}))}/>
-            <Knob label="DELAY"  value={synthMod.delay}  color="#38bdf8" onChange={v=>setSynthMod(p=>({...p,delay:v}))}/>
-            <Knob label="SPACE"  value={synthMod.space}  color="#f97316" onChange={v=>setSynthMod(p=>({...p,space:v}))}/>
-            <Knob label="WIDTH"  value={synthMod.width}  color="#ec4899" onChange={v=>setSynthMod(p=>({...p,width:v}))}/>
-          </div>
-
-          <HR/><Lbl>LIVE CODE</Lbl>
-          <div style={{flex:1, minHeight:72, borderRadius:12, border:"1px solid rgba(34,211,238,.15)", background:"rgba(34,211,238,.03)", padding:10, fontSize:9, color:"#22d3ee77", fontFamily:"monospace", letterSpacing:.5, lineHeight:1.9}}>
-            <div style={{color:"#22d3ee99"}}>stack(</div>
-            <div style={{paddingLeft:8}}>s(<span style={{color:"#ec4899"}}>"bd ~ ~ ~"</span>),</div>
-            <div style={{paddingLeft:8}}>note(<span style={{color:"#a3e635"}}>"{chords[0]}"</span>)</div>
-            <div style={{paddingLeft:12}}>.cutoff(<span style={{color:"#f97316"}}>{liveCodeBasscut}</span>)</div>
-            <div style={{paddingLeft:12}}>.room(<span style={{color:"#38bdf8"}}>{liveCodeRoom}</span>)</div>
-            <div style={{paddingLeft:8}}>s(<span style={{color:"#8b5cf6"}}>"{percMod.type} ~"</span>)</div>
-            <div style={{paddingLeft:12}}>.lpf(<span style={{color:"#a3e635"}}>{liveCodePercLpf}</span>)</div>
-            <div style={{color:"#22d3ee99"}}>{")"}.bpm(<span style={{color:"#f472b6"}}>{bpm}</span>{")"}</div>
-            <motion.div animate={{opacity:[1,0,1]}} transition={{duration:1.2,repeat:Infinity}} style={{color:"#22d3ee",marginTop:2}}>▌</motion.div>
-          </div>
-        </aside>
-
-        {/* CENTER */}
-        <div style={{display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0}}>
-
-          {/* SEQUENCER */}
-          <div style={{flex:"0 0 auto", padding:"16px 18px 8px"}}>
-            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
-              <Lbl>SEQUENCER CORE</Lbl>
-              <div style={{display:"flex", gap:6}}>
-                <button title="Randomize all steps musically" onClick={randomizeSteps} style={{padding:"3px 10px", borderRadius:6, fontSize:8, cursor:"pointer", border:"1px solid rgba(139,92,246,.35)", background:"rgba(139,92,246,.1)", color:"#8b5cf6", fontFamily:"inherit", letterSpacing:1}}>↻ RND</button>
-                <button title="Clear all steps" onClick={()=>setGrid(TRACKS.map(()=>Array(16).fill(false)))} style={{padding:"3px 9px", borderRadius:6, fontSize:8, cursor:"pointer", border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.55)", fontFamily:"inherit", letterSpacing:1}}>CLR</button>
-                <button title="Reset to initial grid" onClick={()=>setGrid(makeGrid())} style={{padding:"3px 9px", borderRadius:6, fontSize:8, cursor:"pointer", border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.55)", fontFamily:"inherit", letterSpacing:1}}>INIT</button>
-              </div>
+        <section className="phase-core">
+          <div className="sequencer-panel">
+            <div className="panel-title">
+              <span><Activity size={16} /> Trigger Matrix</span>
+              <button onClick={() => regenerate()}><RefreshCw size={14} /> GEN</button>
             </div>
-
-            <div style={{position:"relative", padding:"0 0 8px"}}>
-              <motion.div
-                animate={{opacity: playing ? [.35,.8,.35] : .1}}
-                transition={{duration: playing ? 1.4 : 3, repeat:Infinity}}
-                style={{position:"absolute", inset:-8, borderRadius:20, border:"1px solid rgba(139,92,246,.45)", boxShadow:"0 0 50px rgba(139,92,246,.08),inset 0 0 30px rgba(139,92,246,.03)", pointerEvents:"none"}}
-              />
-              <div style={{position:"relative"}}>
-                {/* Step number row */}
-                <div style={{display:"grid", gridTemplateColumns:"72px repeat(16,1fr)", gap:5, marginBottom:4}}>
-                  <div/>
-                  {Array.from({length:16},(_,i) => (
-                    <div key={i} style={{fontSize:7, opacity:step===i&&playing?1:.28, textAlign:"center", letterSpacing:.5,
-                      color:step===i&&playing?"#22d3ee":i%4===0?"#22d3ee":"white", fontWeight:i%4===0?700:400, transition:"color .05s,opacity .05s"}}>{i+1}</div>
-                  ))}
+            <div className="step-numbers">
+              <span />
+              {Array.from({ length: STEPS }, (_, i) => <span key={i}>{String(i + 1).padStart(2, "0")}</span>)}
+            </div>
+            {TRACKS.map((track) => (
+              <div className="track-row" key={track} style={{ "--track": TRACK_COLORS[track] } as React.CSSProperties}>
+                <div className="track-name">
+                  <i />
+                  <span>{track}</span>
                 </div>
-
-                {/* PLAYHEAD — real vertical line */}
-                {playing && (
-                  <div style={{
-                    position:"absolute",
-                    left:`calc(72px + (100% - 72px) * ${(step + 0.5) / 16})`,
-                    top:0, bottom:0, width:2,
-                    background:"linear-gradient(180deg,rgba(34,211,238,0) 0%,#22d3ee 18%,#22d3ee 82%,rgba(34,211,238,0) 100%)",
-                    boxShadow:"0 0 10px #22d3ee,0 0 24px rgba(34,211,238,.35)",
-                    borderRadius:2, pointerEvents:"none", zIndex:10,
-                    transition:"left 0.05s linear",
-                  }}/>
-                )}
-
-                {/* Step buttons */}
-                <div style={{display:"grid", gridTemplateColumns:"72px repeat(16,1fr)", gap:5, position:"relative", zIndex:6}}>
-                  {TRACKS.map((track,r) => (
-                    <div key={track} style={{display:"contents"}}>
-                      <div style={{display:"flex", alignItems:"center", gap:6, fontSize:9, letterSpacing:2, opacity:.75, color:TRACK_COLORS[r], paddingRight:4}}>
-                        <div style={{width:6, height:6, borderRadius:"50%", background:TRACK_COLORS[r], opacity:.7, flexShrink:0}}/>
-                        {track}
-                      </div>
-                      {grid[r].map((on,c) => (
-                        <StepButton key={`${track}-${c}`} on={on} active={step===c&&playing} color={TRACK_COLORS[r]} onClick={() => toggle(r,c)}/>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* HARMONIC DNA + XY PAD */}
-          <div style={{flex:1, display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, padding:"6px 18px 14px", minHeight:0, overflow:"hidden"}}>
-            <div style={{borderRadius:18, border:"1px solid rgba(255,255,255,.07)", background:"rgba(255,255,255,.018)", padding:14, display:"flex", flexDirection:"column", overflow:"hidden"}}>
-              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
-                <Lbl>◈ HARMONIC DNA</Lbl>
-                <span style={{fontSize:8, opacity:.35, letterSpacing:1}}>{chords.length} CHORDS</span>
-              </div>
-              <div style={{display:"flex", flexWrap:"wrap", gap:8, flex:1}}>
-                {chords.map((c,i) => (
-                  <motion.button key={`${c}-${i}`}
-                    whileHover={{scale:1.06, boxShadow:"0 0 22px rgba(139,92,246,.55)"}} whileTap={{scale:0.94}}
-                    onClick={randomChords}
-                    animate={playing?{boxShadow:["0 0 6px rgba(139,92,246,.15)","0 0 18px rgba(139,92,246,.45)","0 0 6px rgba(139,92,246,.15)"]}:{boxShadow:"0 0 0px transparent"}}
-                    transition={{duration:2+i*0.35, repeat:Infinity}}
-                    style={{padding:"10px 16px", borderRadius:12, border:"1px solid rgba(139,92,246,.45)",
-                      background:"linear-gradient(135deg,rgba(139,92,246,.18),rgba(34,211,238,.06))",
-                      color:"white", cursor:"pointer", fontSize:12, fontFamily:"inherit", letterSpacing:1, minWidth:60, textAlign:"center"}}
-                  >{c}</motion.button>
+                {pattern[track].map((step, i) => (
+                  <button
+                    key={`${track}-${i}`}
+                    className={`step ${step.active ? "on" : ""} ${activeStep === i ? "hot" : ""} ${i >= lengths[track] ? "outside" : ""} ${step.locks ? "locked" : ""}`}
+                    onClick={() => toggleStep(track, i)}
+                    onContextMenu={(event) => cycleStep(track, i, event)}
+                    onDoubleClick={() => cycleStepLock(track, i)}
+                    title="Click toggles. Right-click cycles probability/repeat. Double-click cycles parameter locks."
+                    aria-label={`${track} step ${i + 1}`}
+                  >
+                    <span>{track === "BASS" || track === "SYNTH" ? step.note?.replace(/\d$/, "") : step.repeat > 1 ? step.repeat : ""}</span>
+                  </button>
                 ))}
               </div>
-              <div style={{display:"flex", gap:7, paddingTop:10}}>
-                <button onClick={randomChords} style={sBtn("#8b5cf6")}>↻ GENERATE</button>
-                <button onClick={()=>setChords(p=>[...p].reverse())} style={sBtn("#22d3ee")}>⇆ INVERT</button>
-                <button title="Lock first chord across all slots" onClick={()=>setChords(Array(5).fill(chords[0]))} style={sBtn("#ec4899")}>✦ LOCK</button>
-              </div>
-            </div>
-
-            {/* XY PAD — fully usable with pointer capture */}
-            <div style={{borderRadius:18, border:"1px solid rgba(255,255,255,.07)", background:"rgba(255,255,255,.018)", padding:14, display:"flex", flexDirection:"column"}}>
-              <Lbl>⊕ PERFORMANCE FIELD</Lbl>
-              <div
-                ref={xyPadRef}
-                onPointerDown={handleXyDown}
-                onPointerMove={handleXyMove}
-                onPointerUp={handleXyUp}
-                onPointerCancel={handleXyUp}
-                style={{
-                  flex:1, borderRadius:14, position:"relative", overflow:"hidden", cursor:"crosshair",
-                  background:`radial-gradient(circle at ${xyPos.x*100}% ${xyPos.y*100}%,rgba(34,211,238,.28),transparent 40%),radial-gradient(circle at 50% 50%,rgba(139,92,246,.07),transparent 68%),rgba(0,0,0,.30)`,
-                  border:`1px solid ${playing?"rgba(34,211,238,.22)":"rgba(34,211,238,.10)"}`,
-                  marginTop:6, touchAction:"none", userSelect:"none",
-                  transition:"border-color .3s",
-                }}
-              >
-                {/* Grid lines */}
-                <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(255,255,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.03) 1px,transparent 1px)",backgroundSize:"25% 25%"}}/>
-                <div style={{position:"absolute",top:"50%",left:0,right:0,height:1,background:"rgba(255,255,255,.07)"}}/>
-                <div style={{position:"absolute",left:"50%",top:0,bottom:0,width:1,background:"rgba(255,255,255,.07)"}}/>
-                {/* Axis labels */}
-                <div style={{position:"absolute",left:7,top:"50%",transform:"translateY(-50%) rotate(-90deg)",fontSize:8,opacity:.28,letterSpacing:2}}>FILTER</div>
-                <div style={{position:"absolute",bottom:5,left:"50%",transform:"translateX(-50%)",fontSize:8,opacity:.28,letterSpacing:2}}>DEPTH</div>
-                <div style={{position:"absolute",right:5,top:5,fontSize:7,opacity:.22,letterSpacing:1}}>WIDE+BRIGHT</div>
-                <div style={{position:"absolute",right:5,bottom:5,fontSize:7,opacity:.22,letterSpacing:1}}>WIDE+WET</div>
-                <div style={{position:"absolute",left:5,top:5,fontSize:7,opacity:.22,letterSpacing:1}}>NARROW+DRY</div>
-                <div style={{position:"absolute",left:5,bottom:5,fontSize:7,opacity:.22,letterSpacing:1}}>NARROW+DEEP</div>
-                {/* Current value display */}
-                <div style={{position:"absolute",top:5,left:"50%",transform:"translateX(-50%)",fontSize:7,opacity:.45,letterSpacing:1,color:"#22d3ee"}}>
-                  X:{Math.round(xyPos.x*100)} Y:{Math.round(xyPos.y*100)}
+            ))}
+            <div className="note-strip">
+              {(["BASS", "SYNTH"] as const).map((track) => (
+                <div key={track} className="note-lane" style={{ "--track": TRACK_COLORS[track] } as React.CSSProperties}>
+                  <span>{track} PITCH</span>
+                  {pattern[track].map((step, i) => (
+                    <button key={`${track}-note-${i}`} onClick={() => nudgeNote(track, i, 1)} onContextMenu={(event) => { event.preventDefault(); nudgeNote(track, i, -1); }}>
+                      {step.note}
+                    </button>
+                  ))}
                 </div>
-                {/* Orb */}
-                <motion.div
-                  animate={{
-                    left:`calc(${xyPos.x*100}% - 11px)`,
-                    top:`calc(${xyPos.y*100}% - 11px)`,
-                    boxShadow: playing ? ["0 0 16px #22d3ee","0 0 36px #22d3ee","0 0 16px #22d3ee"] : "0 0 14px #22d3ee77",
-                  }}
-                  transition={{type:"spring", stiffness:500, damping:35, boxShadow:{duration:1.4,repeat:Infinity}}}
-                  style={{position:"absolute",width:22,height:22,borderRadius:"50%",background:"linear-gradient(135deg,#22d3ee,#8b5cf6)",border:"2px solid rgba(255,255,255,.5)",pointerEvents:"none"}}
-                />
-                {/* Crosshair lines from orb */}
-                <div style={{position:"absolute",left:`${xyPos.x*100}%`,top:0,bottom:0,width:1,background:"rgba(34,211,238,.12)",pointerEvents:"none"}}/>
-                <div style={{position:"absolute",top:`${xyPos.y*100}%`,left:0,right:0,height:1,background:"rgba(34,211,238,.12)",pointerEvents:"none"}}/>
-              </div>
+              ))}
             </div>
           </div>
 
-          {/* MIXER */}
-          <div style={{borderTop:"1px solid rgba(255,255,255,.045)", display:"grid", gridTemplateColumns:"72px repeat(6,1fr)", flexShrink:0, background:"rgba(0,0,0,.15)"}}>
-            <div style={{padding:"10px 14px", display:"flex", alignItems:"center", fontSize:9, letterSpacing:2, opacity:.4}}>☰ MIX</div>
-            {(["KICK","HAT","PERC","BASS","SYNTH","MASTER"] as const).map((m,i) => {
-              const col = TRACK_COLORS[i] || "#8b5cf6";
-              const sm  = soloMute[m];
-              const vu  = vuLevels[i] || 0;
+          <div className="performance-panel">
+            <div className="xy-head">
+              <span><Waves size={16} /> XY Performance</span>
+              <button className={xy.held ? "latched" : ""} onClick={() => setXy((prev) => ({ ...prev, held: !prev.held }))}>HOLD</button>
+            </div>
+            <div
+              className={`xy-pad ${xy.active ? "touching" : ""}`}
+              style={{ "--x": xy.x, "--y": xy.y } as React.CSSProperties}
+              onPointerDown={(event) => { try { event.currentTarget.setPointerCapture(event.pointerId); } catch {}; handlePad(event); }}
+              onPointerMove={(event) => { if (xyRef.current.active) handlePad(event); }}
+              onPointerUp={releasePad}
+              onPointerCancel={releasePad}
+            >
+              <span className="xy-dot" />
+              <b>DRY</b>
+              <b>HUGE</b>
+              <em>DARK</em>
+              <em>BRIGHT</em>
+            </div>
+            <div className="xy-readout">
+              <span>X dark to bright {Math.round(xy.x * 100)}</span>
+              <span>Y dry to huge {Math.round(xy.y * 100)}</span>
+            </div>
+            <div className="performance-buttons">
+              {PERFORMANCE_ACTIONS.map((action) => (
+                <button key={action} className={held && action === "HOLD" ? "engaged" : ""} onClick={() => perform(action)}>
+                  {action}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="restore-bank">
+          <input ref={fileInputRef} type="file" accept="audio/*,.wav,.aif,.aiff,.mp3,.m4a,.ogg,.flac" hidden onChange={handleSampleChange} />
+
+          <div className="restore-card mixer-card">
+            <h2>Mixer</h2>
+            {TRACKS.map((track) => (
+              <div className="mixer-row" key={track} style={{ "--track": TRACK_COLORS[track] } as React.CSSProperties}>
+                <span><i />{track}</span>
+                <input type="range" min={-32} max={6} step={0.5} value={volumes[track]} onChange={(event) => setVolumes((prev) => ({ ...prev, [track]: Number(event.target.value) }))} />
+                <b>{volumes[track].toFixed(1)}</b>
+                <button className={mutes[track] ? "active" : ""} onClick={() => toggleMute(track)}>M</button>
+                <button className={solos[track] ? "active solo" : ""} onClick={() => toggleSolo(track)}>S</button>
+              </div>
+            ))}
+          </div>
+
+          <div className="restore-card memory-card">
+            <h2>Memory</h2>
+            <input className="memory-name" value={presetName} onChange={(event) => setPresetName(event.target.value)} />
+            <select value={selectedPresetId} onChange={(event) => { setSelectedPresetId(event.target.value); const preset = presets.find((item) => item.id === event.target.value); if (preset) setPresetName(preset.name); }}>
+              <option value="">No memory selected</option>
+              {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+            </select>
+            <div className="memory-actions">
+              <button onClick={savePreset}>SAVE</button>
+              <button onClick={() => loadPreset()}>LOAD</button>
+              <button onClick={deletePreset}>DELETE</button>
+            </div>
+          </div>
+
+          <div className="restore-card samples-card">
+            <h2>Samples</h2>
+            {SAMPLE_TRACKS.map((track) => (
+              <div
+                key={track}
+                className={`sample-row ${dragOverTrack === track ? "dragging" : ""}`}
+                onDragOver={(event) => { event.preventDefault(); setDragOverTrack(track); }}
+                onDragLeave={() => setDragOverTrack(null)}
+                onDrop={(event) => handleSampleDrop(event, track)}
+                style={{ "--track": TRACK_COLORS[track] } as React.CSSProperties}
+              >
+                <span>{track}</span>
+                <b>{sampleNames[track] || "factory voice"}</b>
+                <button onClick={() => openSample(track)}>LOAD</button>
+                <button onClick={() => removeSample(track)}>X</button>
+              </div>
+            ))}
+          </div>
+
+          <div className="restore-card structure-card">
+            <h2>Polymeter + Euclid</h2>
+            {TRACKS.map((track) => {
+              const lane = euclidean[track];
               return (
-                <div key={m} style={{padding:"8px 10px", borderLeft:"1px solid rgba(255,255,255,.04)"}}>
-                  <div style={{fontSize:8, letterSpacing:1.5, opacity:.55, marginBottom:5}}>{m}</div>
-                  <div style={{height:4, borderRadius:999, background:"rgba(255,255,255,.06)", marginBottom:4, overflow:"hidden", cursor:"ew-resize", touchAction:"none"}}
-                    onPointerDown={e=>{const el=e.currentTarget;try{el.setPointerCapture(e.pointerId);}catch{}const r=el.getBoundingClientRect();setVolumes(p=>p.map((x,vi)=>vi===i?clamp((e.clientX-r.left)/r.width):x));}}
-                    onPointerMove={e=>{if(!(e.buttons&1))return;const r=e.currentTarget.getBoundingClientRect();setVolumes(p=>p.map((x,vi)=>vi===i?clamp((e.clientX-r.left)/r.width):x));}}>
-                    <motion.div animate={{width:`${(volumes[i]??1)*100}%`}} transition={{type:"spring",stiffness:300,damping:30}}
-                      style={{height:"100%",borderRadius:999,background:col,boxShadow:`0 0 6px ${col}`}}/>
-                  </div>
-                  <div style={{height:3,borderRadius:999,background:"rgba(255,255,255,.04)",marginBottom:5,overflow:"hidden"}}>
-                    <motion.div animate={{width:`${vu*100}%`}} transition={{duration:.07}}
-                      style={{height:"100%",borderRadius:999,background:vu>0.8?"#ef4444":vu>0.6?"#f97316":"#22d3ee",boxShadow:`0 0 5px ${vu>0.8?"#ef4444":"#22d3ee"}`}}/>
-                  </div>
-                  <div style={{display:"flex",gap:3}}>
-                    <button onClick={()=>setSoloMute(p=>({...p,[m]:p[m]==="solo"?null:"solo"}))} style={{fontSize:7,padding:"2px 5px",borderRadius:4,cursor:"pointer",letterSpacing:1,border:"1px solid rgba(255,215,0,.3)",fontFamily:"inherit",background:sm==="solo"?"rgba(255,215,0,.3)":"transparent",color:sm==="solo"?"#ffd700":"rgba(255,255,255,.32)"}}>S</button>
-                    <button onClick={()=>setSoloMute(p=>({...p,[m]:p[m]==="mute"?null:"mute"}))} style={{fontSize:7,padding:"2px 5px",borderRadius:4,cursor:"pointer",letterSpacing:1,border:"1px solid rgba(255,100,100,.3)",fontFamily:"inherit",background:sm==="mute"?"rgba(255,100,100,.3)":"transparent",color:sm==="mute"?"#ff6464":"rgba(255,255,255,.32)"}}>M</button>
-                  </div>
+                <div className="structure-row" key={track} style={{ "--track": TRACK_COLORS[track] } as React.CSSProperties}>
+                  <span>{track}</span>
+                  <button onClick={() => setTrackLength(track, lengths[track] - 1)}>-</button>
+                  <b>{lengths[track]}</b>
+                  <button onClick={() => setTrackLength(track, lengths[track] + 1)}>+</button>
+                  <button className={lane.enabled ? "active" : ""} onClick={() => updateEuclidean(track, { enabled: !lane.enabled })}>E</button>
+                  <input type="range" min={0} max={lengths[track]} value={lane.hits} onChange={(event) => updateEuclidean(track, { hits: Number(event.target.value), enabled: true })} />
+                  <button onClick={() => updateEuclidean(track, { rotate: lane.rotate - 1, enabled: true })}>R-</button>
+                  <button onClick={() => updateEuclidean(track, { rotate: lane.rotate + 1, enabled: true })}>R+</button>
                 </div>
               );
             })}
           </div>
-        </div>
 
-        {/* RIGHT PANEL */}
-        <aside style={{borderLeft:"1px solid rgba(255,255,255,.05)", padding:"16px 14px", display:"flex", flexDirection:"column", gap:10, overflowY:"auto", background:"rgba(0,0,0,.3)"}}>
-          <Lbl>⚡ PERFORMANCE</Lbl>
-          {[
-            {label:"EVOLVE",     sub:"gradual mutation",        icon:"◎", color:"#22d3ee", fn:evolve},
-            {label:"MUTATE",     sub:"groove template rewrite", icon:"⟳", color:"#8b5cf6", fn:mutate},
-            {label:"BREAKDOWN",  sub:"strip to skeleton",       icon:"↓", color:"#ec4899", fn:breakdown},
-            {label:"GLITCH",     sub:"ratchet stutter burst",   icon:"⚡", color:"#a3e635", fn:glitch},
-            {label:"RNDM CHORDS",sub:"harmonic shift",          icon:"♬", color:"#f472b6", fn:randomChords},
-            {label:"RESET",      sub:"restore all parameters",  icon:"↺", color:"#64748b", fn:resetAll},
-          ].map(({label,sub,icon,color,fn})=>(
-            <motion.button key={label} onClick={fn}
-              whileHover={{scale:1.02, boxShadow:`0 0 28px ${color}2e`}}
-              whileTap={{scale:0.97}}
-              animate={label==="GLITCH"&&glitching?{boxShadow:[`0 0 0px ${color}`,`0 0 28px ${color}`,`0 0 0px ${color}`]}:{}}
-              transition={label==="GLITCH"&&glitching?{duration:.18,repeat:Infinity}:{}}
-              style={{width:"100%", padding:"12px 14px", borderRadius:14, cursor:"pointer",
-                border:`1px solid ${color}2a`, background:`linear-gradient(135deg,${color}10,rgba(0,0,0,.3))`,
-                color:"white", textAlign:"left", fontFamily:"inherit", overflow:"hidden"}}
-            >
-              <div style={{display:"flex", alignItems:"center", gap:10}}>
-                <span style={{fontSize:16, color, width:20, textAlign:"center"}}>{icon}</span>
-                <div>
-                  <div style={{fontSize:10, fontWeight:700, letterSpacing:2}}>{label}</div>
-                  <div style={{fontSize:8, opacity:.4, letterSpacing:1, marginTop:1}}>{sub}</div>
-                </div>
-              </div>
-            </motion.button>
-          ))}
-
-          <HR/>
-          <Lbl>TAP TEMPO</Lbl>
-          <TapTempo onBpm={setBpm}/>
-          <HR/>
-
-          {error && (
-            <div style={{borderRadius:10,border:"1px solid rgba(239,68,68,.3)",background:"rgba(239,68,68,.07)",padding:10}}>
-              <div style={{fontSize:8,color:"#fca5a5",letterSpacing:1,marginBottom:3}}>ERROR</div>
-              <pre style={{color:"#fecaca",whiteSpace:"pre-wrap",fontSize:9,margin:0}}>{error}</pre>
-              <button onClick={()=>setError("")} style={{marginTop:6,fontSize:8,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:"#fca5a5",cursor:"pointer",fontFamily:"inherit"}}>✕ DISMISS</button>
-            </div>
-          )}
-
-          <div style={{marginTop:"auto",borderRadius:12,border:"1px solid rgba(255,255,255,.055)",padding:10,background:"rgba(0,0,0,.2)"}}>
-            <Lbl>WAVEFORM</Lbl>
-            <div style={{display:"flex", alignItems:"flex-end", gap:2, height:32}}>
-              {waveAmps.map((amp,i)=>(
-                <motion.div key={i} animate={{scaleY:amp}} transition={{duration:.07}}
-                  style={{flex:1,height:"100%",borderRadius:2,background:`linear-gradient(180deg,${TRACK_COLORS[i%5]},#22d3ee)`,transformOrigin:"100% 100%",opacity:.65}}/>
-              ))}
+          <div className="restore-card locks-card">
+            <h2>Locks</h2>
+            <p>Double-click PERC, BASS, or SYNTH steps to cycle tone, space, and drive locks.</p>
+            <div>
+              <button onClick={randomizeLocks}>RANDOM LOCKS</button>
+              <button onClick={clearLocks}>CLEAR LOCKS</button>
             </div>
           </div>
-        </aside>
-      </div>
+        </section>
+
+        <section className="engine-bank">
+          <EngineCard title="Rhythm Engine" accent="#a779ff">
+            <RotaryKnob label="Density" value={rhythm.density} onChange={(value) => updateEngine(setRhythm, "density", value)} />
+            <RotaryKnob label="Groove" value={rhythm.groove} onChange={(value) => updateEngine(setRhythm, "groove", value)} />
+            <RotaryKnob label="Chaos" value={rhythm.chaos} onChange={(value) => updateEngine(setRhythm, "chaos", value)} />
+            <RotaryKnob label="Probability" value={rhythm.probability} onChange={(value) => updateEngine(setRhythm, "probability", value)} />
+            <RotaryKnob label="Repeat" value={rhythm.repeat} onChange={(value) => updateEngine(setRhythm, "repeat", value)} />
+            <RotaryKnob label="Swing" value={rhythm.swing} onChange={(value) => updateEngine(setRhythm, "swing", value)} />
+          </EngineCard>
+
+          <EngineCard title="Bass Engine" accent="#ff4f91">
+            <Select label="Root" value={bass.root} values={NOTE_NAMES} onChange={(value) => updateEngine(setBass, "root", value as RootNote)} />
+            <RotaryKnob label="Motion" value={bass.motion} onChange={(value) => updateEngine(setBass, "motion", value)} />
+            <RotaryKnob label="Acid" value={bass.acid} onChange={(value) => updateEngine(setBass, "acid", value)} />
+            <RotaryKnob label="Drive" value={bass.drive} onChange={(value) => updateEngine(setBass, "drive", value)} />
+            <RotaryKnob label="Mutation" value={bass.mutation} onChange={(value) => updateEngine(setBass, "mutation", value)} />
+            <RotaryKnob label="Energy" value={bass.energy} onChange={(value) => updateEngine(setBass, "energy", value)} />
+          </EngineCard>
+
+          <EngineCard title="Synth Engine" accent="#78ffe5">
+            <Select label="Scale" value={synth.scale} values={Object.keys(SCALE_INTERVALS)} onChange={(value) => updateEngine(setSynth, "scale", value as ScaleName)} />
+            <Select label="Mood" value={synth.mood} values={["noir", "hypnotic", "acid", "ritual", "aerial"]} onChange={(value) => updateEngine(setSynth, "mood", value as MoodName)} />
+            <RotaryKnob label="Tension" value={synth.tension} onChange={(value) => updateEngine(setSynth, "tension", value)} />
+            <RotaryKnob label="Movement" value={synth.movement} onChange={(value) => updateEngine(setSynth, "movement", value)} />
+            <RotaryKnob label="Space" value={synth.space} onChange={(value) => updateEngine(setSynth, "space", value)} />
+            <RotaryKnob label="Brightness" value={synth.brightness} onChange={(value) => updateEngine(setSynth, "brightness", value)} />
+          </EngineCard>
+
+          <EngineCard title="Texture Engine" accent="#39e7ff">
+            <RotaryKnob label="Drone" value={texture.drone} onChange={(value) => updateEngine(setTexture, "drone", value)} />
+            <RotaryKnob label="Noise" value={texture.noise} onChange={(value) => updateEngine(setTexture, "noise", value)} />
+            <RotaryKnob label="Metallic" value={texture.metallic} onChange={(value) => updateEngine(setTexture, "metallic", value)} />
+            <RotaryKnob label="Motion" value={texture.motion} onChange={(value) => updateEngine(setTexture, "motion", value)} />
+            <RotaryKnob label="Width" value={texture.width} onChange={(value) => updateEngine(setTexture, "width", value)} />
+            <RotaryKnob label="Darkness" value={texture.darkness} onChange={(value) => updateEngine(setTexture, "darkness", value)} />
+          </EngineCard>
+
+          <EngineCard title="FX Engine" accent="#c8ff36">
+            <RotaryKnob label="Delay" value={fx.delay} onChange={(value) => updateEngine(setFx, "delay", value)} />
+            <RotaryKnob label="Reverb" value={fx.reverb} onChange={(value) => updateEngine(setFx, "reverb", value)} />
+            <RotaryKnob label="Distortion" value={fx.distortion} onChange={(value) => updateEngine(setFx, "distortion", value)} />
+            <RotaryKnob label="Feedback" value={fx.feedback} onChange={(value) => updateEngine(setFx, "feedback", value)} />
+            <RotaryKnob label="Freeze" value={fx.freeze} onChange={(value) => updateEngine(setFx, "freeze", value)} />
+            <RotaryKnob label="Glitch" value={fx.glitch} onChange={(value) => updateEngine(setFx, "glitch", value)} />
+          </EngineCard>
+
+          <div className="phase-status-card">
+            <Sparkles size={18} />
+            <span>Editable lanes are the score. Engines bend probability, synthesis, texture, and effects in real time.</span>
+            <button onClick={() => regenerate()}><SlidersHorizontal size={14} /> Regenerate</button>
+          </div>
+        </section>
+      </section>
     </main>
   );
 }
 
-// ─── Knob component — drag vertically or horizontally to change value ─────────
-function Knob({ label, value, color, onChange }: { label: string; value: number; color: string; onChange: (v: number) => void }) {
-  const startY   = useRef(0);
-  const startX   = useRef(0);
-  const startVal = useRef(value);
-  const isDrag   = useRef(false);
-
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    isDrag.current   = false;
-    startY.current   = e.clientY;
-    startX.current   = e.clientX;
-    startVal.current = value;
-    try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
-  }, [value]);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!(e.buttons & 1)) return;
-    isDrag.current = true;
-    // Vertical drag: up = increase, down = decrease (primary)
-    // Horizontal drag: right = increase, left = decrease (secondary)
-    const dy = startY.current - e.clientY; // up = positive
-    const dx = e.clientX - startX.current; // right = positive
-    const delta = (Math.abs(dy) > Math.abs(dx) ? dy : dx) / 120;
-    const next = Math.round(clamp(startVal.current / 100 + delta, 0, 1) * 100);
-    onChange(next);
-  }, [onChange]);
-
-  // Arc drawing
-  const radius = 22;
-  const cx = 28, cy = 28;
-  const startAngle = -225; // degrees from 3-o-clock, going clockwise
-  const endAngle   = 45;
-  const totalArc   = 270;
-  const fillAngle  = startAngle + (value / 100) * totalArc;
-
-  function polarToXY(angle: number, r: number) {
-    const rad = (angle * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
-  }
-  const arcStart = polarToXY(startAngle, radius);
-  const arcEnd   = polarToXY(fillAngle,  radius);
-  const largeArc = (value / 100) * totalArc > 180 ? 1 : 0;
-  const dotPos   = polarToXY(fillAngle, radius);
-
+function EngineCard({ title, accent, children }: { title: string; accent: string; children: React.ReactNode }) {
   return (
-    <div style={{display:"flex", flexDirection:"column", alignItems:"center", gap:3, cursor:"ns-resize", userSelect:"none"}}>
-      <svg
-        width={56} height={56}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        style={{overflow:"visible", touchAction:"none"}}
-      >
-        {/* Background track */}
-        <circle cx={cx} cy={cy} r={radius} fill="none" stroke="rgba(255,255,255,.07)" strokeWidth={4}/>
-        {/* Colored arc */}
-        {value > 0 && (
-          <path
-            d={`M ${arcStart.x} ${arcStart.y} A ${radius} ${radius} 0 ${largeArc} 1 ${arcEnd.x} ${arcEnd.y}`}
-            fill="none"
-            stroke={color}
-            strokeWidth={4}
-            strokeLinecap="round"
-            style={{filter:`drop-shadow(0 0 4px ${color})`}}
-          />
-        )}
-        {/* Center value */}
-        <text x={cx} y={cy+1} textAnchor="middle" dominantBaseline="middle"
-          fill={color} fontSize={9} fontWeight={700} fontFamily="inherit"
-          style={{pointerEvents:"none"}}>{value}</text>
-        {/* Dot indicator */}
-        <circle cx={dotPos.x} cy={dotPos.y} r={3} fill={color} style={{filter:`drop-shadow(0 0 3px ${color})`}}/>
-      </svg>
-      <div style={{fontSize:7.5, letterSpacing:1, opacity:.55, textAlign:"center", lineHeight:1.2}}>{label}</div>
+    <div className="engine-card" style={{ "--accent": accent } as React.CSSProperties}>
+      <h2>{title}</h2>
+      <div className="engine-controls">{children}</div>
     </div>
   );
 }
 
-// ─── TapTempo ─────────────────────────────────────────────────────────────────
-function TapTempo({ onBpm }: { onBpm: (bpm: number) => void }) {
-  const tapsRef = useRef<number[]>([]);
-  const [lastBpm, setLastBpm] = useState<number|null>(null);
-  const tap = useCallback(() => {
-    const now = Date.now();
-    tapsRef.current = [...tapsRef.current.filter(t => now - t < 3000), now];
-    if (tapsRef.current.length >= 2) {
-      const intervals = tapsRef.current.slice(1).map((t,i) => t - tapsRef.current[i]);
-      const avg = intervals.reduce((a,b)=>a+b,0) / intervals.length;
-      const bpm = Math.round(60000 / avg);
-      const clamped = Math.max(60, Math.min(200, bpm));
-      onBpm(clamped); setLastBpm(clamped);
+interface RotaryKnobProps {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  disabled?: boolean;
+  defaultValue?: number;
+}
+
+function RotaryKnob({ label, value, onChange, min = 0, max = 100, step = 1, disabled = false, defaultValue }: RotaryKnobProps) {
+  const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
+  const range = Math.max(step, max - min);
+  const safeValue = clamp(value, min, max);
+  const normalized = clamp((safeValue - min) / range, 0, 1);
+  const startAngle = -135;
+  const endAngle = startAngle + normalized * 270;
+  const trackStart = polarPoint(startAngle, 41);
+  const trackEnd = polarPoint(135, 41);
+  const valueEnd = polarPoint(endAngle, 41);
+  const dot = polarPoint(endAngle, 28);
+  const indicatorBase = polarPoint(endAngle, 10);
+  const indicatorTip = polarPoint(endAngle, 29);
+  const trackPath = arcPath(trackStart, trackEnd, 41, true);
+  const valuePath = arcPath(trackStart, valueEnd, 41, normalized > 2 / 3);
+
+  function commit(nextValue: number) {
+    if (disabled) return;
+    const stepped = min + Math.round((nextValue - min) / step) * step;
+    const precision = step < 1 ? 3 : 0;
+    onChange(Number(clamp(stepped, min, max).toFixed(precision)));
+  }
+
+  function reset() {
+    commit(defaultValue ?? 50);
+  }
+
+  function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (disabled) return;
+    event.preventDefault();
+    dragRef.current = { startY: event.clientY, startValue: safeValue };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handlePointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    if (!dragRef.current || disabled) return;
+    const pixelsPerRange = 170;
+    const delta = (dragRef.current.startY - event.clientY) / pixelsPerRange;
+    commit(dragRef.current.startValue + delta * range);
+  }
+
+  function handlePointerEnd(event: React.PointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
+  }
+
+  function handleWheel(event: React.WheelEvent<HTMLDivElement>) {
+    if (disabled) return;
+    event.preventDefault();
+    commit(safeValue + (event.deltaY < 0 ? step : -step));
+  }
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (disabled) return;
+    if (event.key === "ArrowUp" || event.key === "ArrowRight") {
+      event.preventDefault();
+      commit(safeValue + step);
     }
-  }, [onBpm]);
-  return (
-    <motion.button onClick={tap} whileTap={{scale:0.93, background:"rgba(34,211,238,.2)"}}
-      style={{width:"100%", padding:"10px 0", borderRadius:10, cursor:"pointer",
-        border:"1px solid rgba(34,211,238,.25)", background:"rgba(34,211,238,.06)",
-        color:"#22d3ee", fontSize:10, letterSpacing:2, fontFamily:"inherit", fontWeight:600,
-        display:"flex", alignItems:"center", justifyContent:"center", gap:8}}>
-      TAP ▶
-      {lastBpm && <span style={{fontSize:9, opacity:.65}}>{lastBpm}</span>}
-    </motion.button>
-  );
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
-function Lbl({children}:{children:React.ReactNode}) {
-  return <div style={{fontSize:8,letterSpacing:3,opacity:.45,marginBottom:3,textTransform:"uppercase"}}>{children}</div>;
-}
-function HR() { return <div style={{height:1,background:"rgba(255,255,255,.05)",margin:"1px 0"}}/>; }
-
-const StepButton = memo(function StepButton({on,active,color,onClick}:{on:boolean;active:boolean;color:string;onClick:()=>void}) {
-  return (
-    <motion.button onClick={onClick}
-      animate={{scale:active?1.12:1, opacity:on?1:0.18, boxShadow:active?`0 0 14px ${color}bb,0 0 28px ${color}44`:on?`0 0 8px ${color}44`:"none"}}
-      transition={{type:"spring",stiffness:700,damping:28}}
-      whileHover={{scale:1.08,opacity:0.85}} whileTap={{scale:0.92}}
-      style={{height:26,borderRadius:5,
-        border:on?`1px solid ${color}77`:"1px solid rgba(255,255,255,.06)",
-        background:on?`linear-gradient(135deg,${color}bb,${color}44)`:active?"rgba(255,255,255,.07)":"rgba(255,255,255,.025)",
-        cursor:"pointer"}}
-    />
-  );
-});
-
-function MacroBar({label,value,color,onChange}:{label:string;value:number;color:string;onChange:(v:number)=>void}) {
-  const ref = useRef<HTMLDivElement>(null);
-  function upd(e:React.MouseEvent|React.PointerEvent) {
-    if (!ref.current) return;
-    const r = ref.current.getBoundingClientRect();
-    onChange(Math.round(clamp((e.clientX-r.left)/r.width)*100));
+    if (event.key === "ArrowDown" || event.key === "ArrowLeft") {
+      event.preventDefault();
+      commit(safeValue - step);
+    }
+    if (event.key === "Home") {
+      event.preventDefault();
+      commit(min);
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      commit(max);
+    }
   }
+
   return (
-    <div style={{marginBottom:2}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:8,letterSpacing:1.5}}>
-        <span style={{opacity:.65}}>{label}</span>
-        <span style={{color,opacity:.85}}>{value}%</span>
-      </div>
-      <div ref={ref} onClick={upd}
-        onPointerDown={e=>{try{(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);}catch{}upd(e);}}
-        onPointerMove={e=>{if(e.buttons&1)upd(e);}}
-        style={{height:6,borderRadius:999,background:"rgba(255,255,255,.055)",overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}>
-        <motion.div animate={{width:`${value}%`}} transition={{type:"spring",stiffness:300,damping:30}}
-          style={{height:"100%",borderRadius:999,background:`linear-gradient(90deg,${color}77,${color})`,boxShadow:`0 0 8px ${color}77`}}/>
-      </div>
+    <div
+      className={`rotary-knob${disabled ? " disabled" : ""}`}
+      role="slider"
+      tabIndex={disabled ? -1 : 0}
+      aria-label={label}
+      aria-valuemin={min}
+      aria-valuemax={max}
+      aria-valuenow={safeValue}
+      aria-disabled={disabled}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerEnd}
+      onPointerCancel={handlePointerEnd}
+      onWheel={handleWheel}
+      onDoubleClick={reset}
+      onKeyDown={handleKeyDown}
+    >
+      <span className="rotary-label">{label}</span>
+      <svg className="rotary-face" viewBox="0 0 100 100" aria-hidden="true">
+        <defs>
+          <radialGradient id="phaseKnobBody" cx="35%" cy="28%" r="76%">
+            <stop offset="0%" stopColor="#2b3144" />
+            <stop offset="54%" stopColor="#11141f" />
+            <stop offset="100%" stopColor="#05060b" />
+          </radialGradient>
+        </defs>
+        <path className="rotary-ring-track" d={trackPath} />
+        {normalized > 0 ? <path className="rotary-ring-value" d={valuePath} /> : null}
+        <circle className="rotary-body" cx="50" cy="50" r="31" />
+        <line className="rotary-indicator" x1={indicatorBase.x} y1={indicatorBase.y} x2={indicatorTip.x} y2={indicatorTip.y} />
+        <circle className="rotary-dot" cx={dot.x} cy={dot.y} r="2.8" />
+      </svg>
+      <b className="rotary-value">{Math.round(safeValue)}</b>
     </div>
   );
 }
 
-function Slider({label,value,color,onChange}:{label:string;value:number;color:string;onChange:(v:number)=>void}) {
-  const ref = useRef<HTMLDivElement>(null);
-  function upd(e:React.MouseEvent|React.PointerEvent) {
-    if (!ref.current) return;
-    const r = ref.current.getBoundingClientRect();
-    onChange(Math.round(clamp((e.clientX-r.left)/r.width)*100));
-  }
-  return (
-    <div style={{marginBottom:5}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:7.5,letterSpacing:1.4}}>
-        <span style={{opacity:.5}}>{label}</span>
-        <span style={{color,opacity:.85}}>{value}</span>
-      </div>
-      <div ref={ref} onClick={upd}
-        onPointerDown={e=>{try{(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);}catch{}upd(e);}}
-        onPointerMove={e=>{if(e.buttons&1)upd(e);}}
-        style={{height:4,borderRadius:999,background:"rgba(255,255,255,.055)",overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}>
-        <motion.div animate={{width:`${value}%`}} transition={{type:"spring",stiffness:320,damping:28}}
-          style={{height:"100%",borderRadius:999,background:color,boxShadow:`0 0 6px ${color}`}}/>
-      </div>
-    </div>
-  );
+function polarPoint(degrees: number, radius: number) {
+  const radians = ((degrees - 90) * Math.PI) / 180;
+  return {
+    x: roundSvgNumber(50 + radius * Math.cos(radians)),
+    y: roundSvgNumber(50 + radius * Math.sin(radians)),
+  };
 }
 
-function FxKnob({label,value,color,onChange}:{label:string;value:number;color:string;onChange:(v:number)=>void}) {
-  const deg = -135 + (value/100)*270;
-  return (
-    <div style={{textAlign:"center",flex:1}}>
-      <div onClick={()=>onChange(Math.round((value+10)%110))} style={{width:52,height:52,margin:"0 auto 5px",borderRadius:"50%",border:`2px solid ${color}44`,
-        background:`conic-gradient(${color}55 0deg,${color}55 ${deg+135}deg,rgba(255,255,255,.04) ${deg+135}deg)`,
-        display:"grid",placeItems:"center",cursor:"pointer",boxShadow:`0 0 14px ${color}22`,position:"relative"}}>
-        <div style={{fontSize:9,fontWeight:700,color}}>{value}</div>
-        <div style={{position:"absolute",width:2,height:13,background:color,borderRadius:2,top:5,transform:`rotate(${deg}deg)`,transformOrigin:"50% 100%"}}/>
-      </div>
-      <div style={{fontSize:8,opacity:.45,letterSpacing:1.5}}>{label}</div>
-    </div>
-  );
+function roundSvgNumber(value: number) {
+  return Number(value.toFixed(2));
 }
 
-function microBtn():React.CSSProperties {
-  return {width:20,height:13,borderRadius:4,border:"1px solid rgba(255,255,255,.1)",background:"rgba(255,255,255,.03)",color:"rgba(255,255,255,.5)",fontSize:7,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"};
+function arcPath(start: { x: number; y: number }, end: { x: number; y: number }, radius: number, largeArc: boolean) {
+  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radius} ${radius} 0 ${largeArc ? 1 : 0} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
 }
-function sBtn(color:string):React.CSSProperties {
-  return {flex:1,padding:"5px 0",borderRadius:7,cursor:"pointer",border:`1px solid ${color}33`,background:`${color}0e`,color:"rgba(255,255,255,.55)",fontSize:8,letterSpacing:1,fontFamily:"inherit"};
+
+function Select({ label, value, values, onChange }: { label: string; value: string; values: readonly string[]; onChange: (value: string) => void }) {
+  return (
+    <label className="macro-select">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {values.map((item) => <option key={item} value={item}>{item}</option>)}
+      </select>
+    </label>
+  );
 }
