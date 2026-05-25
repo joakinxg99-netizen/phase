@@ -230,46 +230,46 @@ const SCALE_INTERVALS: Record<ScaleName, number[]> = {
 };
 
 const DEFAULT_RHYTHM: RhythmEngine = {
-  density: 46,
-  groove: 10,
-  swing: 0,
+  density: 40,
+  groove: 20,
+  swing: 6,
   probability: 100,
   repeat: 0,
-  chaos: 2,
+  chaos: 0,
 };
 
 const DEFAULT_BASS: BassEngine = {
   root: "D",
-  motion: 22,
-  acid: 42,
-  drive: 34,
-  mutation: 6,
-  energy: 72,
+  motion: 30,
+  acid: 35,
+  drive: 25,
+  mutation: 10,
+  energy: 60,
 };
 
 const DEFAULT_SYNTH: SynthEngine = {
   scale: "phrygian",
   mood: "noir",
-  tension: 14,
-  movement: 12,
-  space: 12,
-  brightness: 16,
+  tension: 20,
+  movement: 20,
+  space: 20,
+  brightness: 25,
 };
 
 const DEFAULT_TEXTURE: TextureEngine = {
-  drone: 3,
+  drone: 8,
   noise: 0,
-  metallic: 0,
-  motion: 6,
-  width: 18,
-  darkness: 88,
+  metallic: 5,
+  motion: 10,
+  width: 35,
+  darkness: 75,
 };
 
 const DEFAULT_FX: FxEngine = {
-  delay: 5,
-  reverb: 6,
-  distortion: 8,
-  feedback: 4,
+  delay: 10,
+  reverb: 12,
+  distortion: 5,
+  feedback: 8,
   freeze: 0,
   glitch: 0,
 };
@@ -286,7 +286,7 @@ const SAMPLE_TRACKS = ["KICK", "HAT", "PERC"] as const;
 type SampleTrack = (typeof SAMPLE_TRACKS)[number];
 const PRESET_STORAGE_KEY = "phase.presets.v3";
 const DEFAULT_LENGTHS: Record<TrackId, number> = { KICK: 16, HAT: 16, PERC: 16, BASS: 16, SYNTH: 16 };
-const DEFAULT_VOLUMES: Record<TrackId, number> = { KICK: 0, HAT: -14, PERC: -16, BASS: -5, SYNTH: -17 };
+const DEFAULT_VOLUMES: Record<TrackId, number> = { KICK: -1, HAT: -13, PERC: -15, BASS: -4, SYNTH: -18 };
 const DEFAULT_BOOLEAN_TRACKS: Record<TrackId, boolean> = { KICK: false, HAT: false, PERC: false, BASS: false, SYNTH: false };
 const DEFAULT_EUCLIDEAN: Record<TrackId, EuclideanLane> = {
   KICK: { enabled: false, hits: 4, rotate: 0 },
@@ -410,7 +410,7 @@ export default function Home() {
   const [synth, setSynth] = useState<SynthEngine>(DEFAULT_SYNTH);
   const [texture, setTexture] = useState<TextureEngine>(DEFAULT_TEXTURE);
   const [fx, setFx] = useState<FxEngine>(DEFAULT_FX);
-  const [xy, setXy] = useState<XYState>({ x: 0.42, y: 0.3, active: false, held: true });
+  const [xy, setXy] = useState<XYState>({ x: 0.42, y: 0.08, active: false, held: true });
   const [held, setHeld] = useState(false);
   const [status, setStatus] = useState("PHASE initialized");
   const [lengths, setLengths] = useState<Record<TrackId, number>>(DEFAULT_LENGTHS);
@@ -685,24 +685,24 @@ export default function Home() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = textureRef.current;
-    const freq = mapRange(100 - next.darkness + next.metallic * 0.15, 0, 115, 65, 520);
+    const freq = mapRange(100 - next.darkness + next.metallic * 0.12, 0, 112, 45, 380);
     rig.textureFilter.frequency.value = freq;
-    rig.textureFilter.Q.value = mapRange(next.metallic, 0, 100, 0.18, 0.9);
-    rig.textureGain.gain.value = transportRunningRef.current ? mapRange(next.drone * 0.18 + next.noise * 0.08, 0, 100, 0, 0.0018) : 0;
-    rig.textureDrone.frequency.value = Tone.Frequency(`${bassRef.current.root}1`).toFrequency() * mapRange(next.motion, 0, 100, 0.36, 0.72);
-    rig.textureNoise.type = "brown";
+    rig.textureFilter.Q.value = mapRange(next.metallic, 0, 100, 0.12, 0.7);
+    rig.textureGain.gain.value = transportRunningRef.current ? safeTextureGain(next) : 0;
+    rig.textureDrone.frequency.value = Tone.Frequency(`${bassRef.current.root}1`).toFrequency() * mapRange(next.motion, 0, 100, 0.32, 0.68);
+    rig.textureNoise.type = next.noise > 68 ? "pink" : "brown";
   }
 
   function applyFxEngine() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = fxRef.current;
-    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.24);
-    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.025, 0.58);
-    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.45, 0, 145, 0.01, 0.38);
-    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 0.7, 6.5);
-    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.015, 0.42);
-    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.02, 0.28);
+    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.16);
+    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.015, 0.42);
+    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.35, 0, 135, 0.006, 0.28);
+    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 0.55, 5.2);
+    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.01, 0.34);
+    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.015, 0.22);
   }
 
   function restoreRunningFxAndTexture() {
@@ -711,21 +711,34 @@ export default function Home() {
 
     const nextFx = fxRef.current;
     const nextTexture = textureRef.current;
-    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.025, 0.58);
-    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.24);
-    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.45, 0, 145, 0.01, 0.38);
-    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.02, 0.28);
-    rig.textureGain.gain.value = transportRunningRef.current ? mapRange(nextTexture.drone * 0.18 + nextTexture.noise * 0.08, 0, 100, 0, 0.0018) : 0;
+    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.015, 0.42);
+    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.16);
+    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.35, 0, 135, 0.006, 0.28);
+    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.015, 0.22);
+    rig.textureGain.gain.value = transportRunningRef.current ? safeTextureGain(nextTexture) : 0;
+  }
+
+  function safeTextureGain(nextTexture = textureRef.current) {
+    // Texture should be atmospheric, not a constant hiss layer.
+    // Drone stays barely present; noise is silent at 0 and remains heavily attenuated.
+    const dronePart = Math.pow(clamp01(nextTexture.drone / 100), 1.8) * 0.0014;
+    const noisePart = Math.pow(clamp01(nextTexture.noise / 100), 2.4) * 0.0022;
+    return dronePart + noisePart;
+  }
+
+  function stopStrudelEngine() {
+    try { strudelSchedulerRef.current?.stop(); } catch {}
+    strudelSchedulerRef.current = null;
   }
 
   function applyXY(x: number, y: number) {
     const rig = rigRef.current;
     if (!rig) return;
-    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 420, 5600);
-    rig.hatFilter.frequency.value = mapRange(x, 0, 1, 5600, 9800);
-    rig.textureFilter.frequency.value = mapRange(x, 0, 1, 70, 520);
-    rig.delay.wet.value = mapRange(y, 0, 1, 0.003, 0.18);
-    rig.reverb.wet.value = mapRange(y, 0, 1, 0.006, 0.24);
+    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 380, 5200);
+    rig.hatFilter.frequency.value = mapRange(x, 0, 1, 5600, 9200);
+    rig.textureFilter.frequency.value = mapRange(x, 0, 1, 45, 360);
+    rig.delay.wet.value = mapRange(y, 0, 1, 0, 0.14);
+    rig.reverb.wet.value = mapRange(y, 0, 1, 0.002, 0.18);
   }
 
   function rewriteMelodicNotes(track: "BASS" | "SYNTH") {
@@ -768,8 +781,8 @@ export default function Home() {
           continue;
         } catch {}
       }
-      if (track === "KICK") rig.kick.triggerAttackRelease("C1", "32n", t, velocity * 1.08);
-      if (track === "HAT") rig.hat.triggerAttackRelease("64n", t, velocity * 0.34);
+      if (track === "KICK") rig.kick.triggerAttackRelease("C1", "16n", t, velocity * 1.04);
+      if (track === "HAT") rig.hat.triggerAttackRelease("64n", t, velocity * 0.28);
       if (track === "PERC") {
         const notes = ["A#1", "C2", "D#2", "F2"];
         rig.perc.triggerAttackRelease(notes[index % notes.length], "64n", t, velocity * 0.46);
@@ -833,8 +846,15 @@ export default function Home() {
   }
 
   async function playStrudel() {
+    stopStrudelEngine();
+    try { Tone.Transport.stop(); } catch {}
+    try { sequenceRef.current?.dispose(); } catch {}
+    sequenceRef.current = null;
     const strudel = await loadStrudelModules();
-    if (!strudel) return;
+    if (!strudel) {
+      setStatus("Strudel unavailable");
+      return;
+    }
     try {
       strudel.initAudioOnFirstClick?.();
       const ctx = strudel.getAudioContext?.();
@@ -859,6 +879,9 @@ export default function Home() {
       setStatus("Strudel engine playing");
     } catch (error) {
       console.error(error);
+      stopStrudelEngine();
+      transportRunningRef.current = false;
+      setPlaying(false);
       setStatus("Strudel engine failed");
     }
   }
@@ -877,6 +900,8 @@ export default function Home() {
       stopTone();
       return;
     }
+
+    stopStrudelEngine();
 
     writePhaseDiagnostics({
       audioStartAttempts: (window.__PHASE_DIAGNOSTICS__?.audioStartAttempts || 0) + 1,
@@ -917,7 +942,7 @@ export default function Home() {
     const now = Tone.now();
     transportRunningRef.current = false;
 
-    try { strudelSchedulerRef.current?.stop(); } catch {}
+    stopStrudelEngine();
     try { Tone.Transport.stop(); } catch {}
     try { Tone.Transport.cancel(); } catch {}
     try { sequenceRef.current?.stop(); } catch {}
@@ -1016,6 +1041,58 @@ export default function Home() {
   function regenerate(nextRhythm = rhythm, nextBass = bass, nextSynth = synth) {
     setPattern(createPattern(nextRhythm, nextBass, nextSynth));
     setStatus("Pattern regenerated");
+  }
+
+  function randomizeSteps() {
+    const random = seededRandom(Date.now() & 0xffffffff);
+    const percHits = Math.round(mapRange(rhythmRef.current.density, 0, 100, 2, 7));
+    const percRotate = Math.floor(random() * STEPS);
+    const percPattern = euclid(STEPS, percHits, percRotate);
+    const bassDegrees = [0, 0, 1, -1, 2, 3];
+
+    setPattern({
+      KICK: Array.from({ length: STEPS }, (_, i) => {
+        const step = makeStep(i % 4 === 0 || (rhythmRef.current.density > 72 && [3, 7, 11, 15].includes(i) && random() < 0.16), "KICK", i);
+        step.velocity = i % 4 === 0 ? 108 : 74;
+        return step;
+      }),
+      HAT: Array.from({ length: STEPS }, (_, i) => {
+        const offbeat = i % 4 === 2;
+        const ghost = rhythmRef.current.density > 58 && i % 2 === 1 && random() < mapRange(rhythmRef.current.density, 58, 100, 0.08, 0.42);
+        const step = makeStep(offbeat || ghost, "HAT", i);
+        step.velocity = offbeat ? 82 : 45;
+        step.probability = offbeat ? 100 : 70;
+        return step;
+      }),
+      PERC: Array.from({ length: STEPS }, (_, i) => {
+        const anchor = [5, 13].includes(i) && random() < 0.72;
+        const step = makeStep(anchor || (percPattern[i] && random() < 0.58), "PERC", i);
+        step.velocity = anchor ? 78 : 58;
+        step.probability = anchor ? 92 : 68;
+        step.repeat = rhythmRef.current.repeat > 58 && random() < 0.18 ? 2 : 1;
+        return step;
+      }),
+      BASS: Array.from({ length: STEPS }, (_, i) => {
+        const anchors = [0, 6, 10, 14];
+        const active = anchors.includes(i) || (bassRef.current.motion > 56 && [3, 15].includes(i) && random() < 0.35);
+        const degree = active ? pickWith(bassDegrees, random) : 0;
+        const step = makeStep(active, "BASS", i);
+        step.note = scaleNote(bassRef.current.root, synthRef.current.scale, degree, 1);
+        step.velocity = anchors.includes(i) ? 96 : 68;
+        step.repeat = bassRef.current.acid > 72 && random() < 0.18 ? 2 : 1;
+        return step;
+      }),
+      SYNTH: Array.from({ length: STEPS }, (_, i) => {
+        const active = [6, 14].includes(i) ? random() < 0.7 : random() < mapRange(synthRef.current.movement, 0, 100, 0.02, 0.16);
+        const degree = pickWith([1, 2, 3, 4, 6], random);
+        const step = makeStep(active, "SYNTH", i);
+        step.note = scaleNote(bassRef.current.root, synthRef.current.scale, degree, 3);
+        step.velocity = 62;
+        step.probability = 86;
+        return step;
+      }),
+    });
+    setStatus("Steps randomized");
   }
 
   function updateEngine<T extends object>(setter: React.Dispatch<React.SetStateAction<T>>, key: keyof T, value: T[keyof T]) {
@@ -1247,7 +1324,7 @@ export default function Home() {
       setTexture(DEFAULT_TEXTURE);
       setFx(DEFAULT_FX);
       setHeld(false);
-      setXy({ x: 0.56, y: 0.42, active: false, held: true });
+      setXy({ x: 0.42, y: 0.08, active: false, held: true });
       setPattern(createPattern());
       setStatus("INIT recalled");
       return;
@@ -1362,14 +1439,14 @@ export default function Home() {
 
         .engine-bank {
           display: grid;
-          grid-template-columns: repeat(3, minmax(280px, 1fr));
+          grid-template-columns: repeat(2, minmax(430px, 1fr));
           gap: 18px;
           align-items: stretch;
         }
 
         .engine-card .engine-controls {
           display: grid;
-          grid-template-columns: repeat(3, minmax(108px, 1fr));
+          grid-template-columns: repeat(3, minmax(128px, 1fr));
           gap: 14px;
           align-items: stretch;
         }
@@ -1377,7 +1454,7 @@ export default function Home() {
         .rotary-knob {
           position: relative;
           min-width: 0;
-          min-height: 174px;
+          min-height: 188px;
           display: grid;
           grid-template-rows: auto 1fr auto;
           gap: 9px;
@@ -1393,7 +1470,7 @@ export default function Home() {
           box-shadow:
             inset 0 1px 0 rgba(255, 255, 255, 0.08),
             inset 0 -16px 28px rgba(0, 0, 0, 0.28);
-          cursor: ns-resize;
+          cursor: grab;
           touch-action: none;
           user-select: none;
           -webkit-user-select: none;
@@ -1422,7 +1499,7 @@ export default function Home() {
           pointer-events: none;
         }
 
-        .rotary-knob:hover,
+        .rotary-knob:active,
         .rotary-knob:focus-visible {
           border-color: color-mix(in srgb, var(--accent) 54%, rgba(255, 255, 255, 0.16));
           box-shadow:
@@ -1456,7 +1533,7 @@ export default function Home() {
         }
 
         .rotary-face {
-          width: min(112px, 100%);
+          width: min(126px, 100%);
           aspect-ratio: 1;
           filter: drop-shadow(0 0 12px color-mix(in srgb, var(--accent) 20%, transparent));
         }
@@ -1557,7 +1634,7 @@ export default function Home() {
         .master-readout,
         .master-action,
         .master-status {
-          min-height: 174px;
+          min-height: 188px;
           display: grid;
           align-content: center;
           justify-items: center;
@@ -1734,9 +1811,9 @@ export default function Home() {
           <div className="phase-brand">
             <span className="phase-mark"><Disc3 size={24} /></span>
             <div>
-              <h1>PHASE TEST 999</h1>
+              <h1>PHASE STEPS v1.1</h1>
               <p>Hybrid generative techno instrument</p>
-              <span className="phase-version">PHASE SOUND PRO v0.9</span>
+              <span className="phase-version">PHASE PATCH v1.0 · TECHNO DEFAULT</span>
             </div>
           </div>
 
@@ -1753,7 +1830,7 @@ export default function Home() {
             </label>
             <div className="engine-switch">
               {(["tone", "strudel"] as EngineMode[]).map((mode) => (
-                <button key={mode} className={engineMode === mode ? "selected" : ""} onClick={() => { setEngineMode(mode); setStatus(`${mode.toUpperCase()} engine selected`); }}>
+                <button key={mode} className={engineMode === mode ? "selected" : ""} onClick={() => { stopTone(); setEngineMode(mode); setStatus(`${mode.toUpperCase()} engine selected`); }}>
                   {mode}
                 </button>
               ))}
@@ -1772,6 +1849,7 @@ export default function Home() {
             <div className="panel-title">
               <span><Activity size={16} /> Trigger Matrix</span>
               <button onClick={() => regenerate()}><RefreshCw size={14} /> GEN</button>
+              <button onClick={randomizeSteps}><Sparkles size={14} /> RANDOM STEPS</button>
             </div>
             <div className="step-numbers">
               <span />
@@ -2061,12 +2139,6 @@ function RotaryKnob({ label, value, onChange, min = 0, max = 100, step = 1, disa
     try { event.currentTarget.releasePointerCapture(event.pointerId); } catch {}
   }
 
-  function handleWheel(event: React.WheelEvent<HTMLDivElement>) {
-    if (disabled) return;
-    event.preventDefault();
-    commit(safeValue + (event.deltaY < 0 ? step : -step));
-  }
-
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
     if (disabled) return;
     if (event.key === "ArrowUp" || event.key === "ArrowRight") {
@@ -2101,7 +2173,6 @@ function RotaryKnob({ label, value, onChange, min = 0, max = 100, step = 1, disa
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
       onPointerCancel={handlePointerEnd}
-      onWheel={handleWheel}
       onDoubleClick={reset}
       onKeyDown={handleKeyDown}
     >
