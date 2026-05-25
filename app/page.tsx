@@ -168,6 +168,8 @@ interface StrudelPattern {
   s(value: string): StrudelPattern;
 }
 
+type StrudelLoosePattern = StrudelPattern & Record<string, (...args: unknown[]) => StrudelPattern>;
+
 interface StrudelScheduler {
   setPattern(pattern: StrudelPattern): void;
   start(): void;
@@ -179,8 +181,10 @@ interface StrudelRepl {
 }
 
 interface StrudelModules {
-  initAudioOnFirstClick?: () => void;
+  initAudioOnFirstClick?: () => void | Promise<void>;
+  initAudio?: () => void | Promise<void>;
   getAudioContext?: () => AudioContext | undefined;
+  samples?: (source: string | Record<string, unknown>) => unknown;
   repl: (options: { defaultOutput: unknown; getTime: () => number }) => StrudelRepl;
   webaudioOutput: unknown;
   sound: (pattern: string) => StrudelPattern;
@@ -697,10 +701,10 @@ export default function Home() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = bassRef.current;
-    rig.bassFilter.frequency.value = mapRange(next.energy, 0, 100, 160, 1850);
-    rig.bassFilter.Q.value = mapRange(next.acid, 0, 100, 0.9, 7.6);
-    rig.bassDrive.distortion = mapRange(next.drive, 0, 100, 0.04, 0.68);
-    rig.bassDrive.wet.value = mapRange(next.drive, 0, 100, 0.1, 0.55);
+    rig.bassFilter.frequency.value = mapRange(next.energy, 0, 100, 120, 3600);
+    rig.bassFilter.Q.value = mapRange(next.acid, 0, 100, 0.8, 12.5);
+    rig.bassDrive.distortion = mapRange(next.drive, 0, 100, 0.03, 0.92);
+    rig.bassDrive.wet.value = mapRange(next.drive, 0, 100, 0.08, 0.72);
     rig.bass.portamento = mapRange(next.acid + next.motion * 0.25, 0, 125, 0.001, 0.095);
   }
 
@@ -710,11 +714,11 @@ export default function Home() {
     const next = synthRef.current;
     const x = xyRef.current.x;
     const cutoffMacro = next.filterCutoff ?? next.brightness;
-    rig.synthFilter.frequency.value = mapRange(cutoffMacro * 0.85 + next.brightness * 0.45 + x * 100 * 0.35, 0, 165, 280, 7600);
-    rig.synthFilter.Q.value = mapRange(next.resonance ?? next.tension, 0, 100, 0.35, 5.6);
-    rig.synthEq.low.value = mapRange(next.eqLow ?? 50, 0, 100, -10, 5);
-    rig.synthEq.mid.value = mapRange(next.eqMid ?? 50, 0, 100, -12, 4);
-    rig.synthEq.high.value = mapRange(next.eqHigh ?? 50, 0, 100, -14, 5);
+    rig.synthFilter.frequency.value = mapRange(cutoffMacro * 0.95 + next.brightness * 0.55 + x * 100 * 0.45, 0, 195, 120, 11200);
+    rig.synthFilter.Q.value = mapRange(next.resonance ?? next.tension, 0, 100, 0.25, 13.5);
+    rig.synthEq.low.value = mapRange(next.eqLow ?? 50, 0, 100, -18, 9);
+    rig.synthEq.mid.value = mapRange(next.eqMid ?? 50, 0, 100, -24, 8);
+    rig.synthEq.high.value = mapRange(next.eqHigh ?? 50, 0, 100, -24, 10);
     rig.trackVolumes.SYNTH.volume.value = mapRange(next.mood === "aerial" ? next.space : next.tension, 0, 100, -21, -8);
   }
 
@@ -734,12 +738,12 @@ export default function Home() {
     const rig = rigRef.current;
     if (!rig) return;
     const next = fxRef.current;
-    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.16);
-    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.015, 0.42);
-    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.35, 0, 135, 0.006, 0.28);
-    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 0.55, 5.2);
-    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.01, 0.34);
-    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.015, 0.22);
+    rig.delay.wet.value = mapRange(next.delay, 0, 100, 0, 0.56);
+    rig.delay.feedback.value = mapRange(next.feedback + next.freeze, 0, 200, 0.01, 0.86);
+    rig.reverb.wet.value = mapRange(next.reverb + next.freeze * 0.35, 0, 135, 0.004, 0.62);
+    rig.reverb.decay = mapRange(next.reverb + next.freeze, 0, 200, 0.35, 14);
+    rig.drive.distortion = mapRange(next.distortion, 0, 100, 0.005, 0.88);
+    rig.drive.wet.value = mapRange(next.distortion, 0, 100, 0.01, 0.68);
   }
 
   function restoreRunningFxAndTexture() {
@@ -748,10 +752,10 @@ export default function Home() {
 
     const nextFx = fxRef.current;
     const nextTexture = textureRef.current;
-    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.015, 0.42);
-    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.16);
-    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.35, 0, 135, 0.006, 0.28);
-    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.015, 0.22);
+    rig.delay.feedback.value = mapRange(nextFx.feedback + nextFx.freeze, 0, 200, 0.01, 0.86);
+    rig.delay.wet.value = mapRange(nextFx.delay, 0, 100, 0, 0.56);
+    rig.reverb.wet.value = mapRange(nextFx.reverb + nextFx.freeze * 0.35, 0, 135, 0.004, 0.62);
+    rig.drive.wet.value = mapRange(nextFx.distortion, 0, 100, 0.01, 0.68);
     rig.textureGain.gain.value = transportRunningRef.current ? safeTextureGain(nextTexture) : 0;
   }
 
@@ -771,11 +775,11 @@ export default function Home() {
   function applyXY(x: number, y: number) {
     const rig = rigRef.current;
     if (!rig) return;
-    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 380, 5200);
+    rig.synthFilter.frequency.value = mapRange(x, 0, 1, 100, 11200);
     rig.hatFilter.frequency.value = mapRange(x, 0, 1, 5600, 9200);
     rig.textureFilter.frequency.value = mapRange(x, 0, 1, 45, 360);
-    rig.delay.wet.value = mapRange(y, 0, 1, 0, 0.14);
-    rig.reverb.wet.value = mapRange(y, 0, 1, 0.002, 0.18);
+    rig.delay.wet.value = mapRange(y, 0, 1, 0, 0.54);
+    rig.reverb.wet.value = mapRange(y, 0, 1, 0.002, 0.58);
   }
 
   function rewriteMelodicNotes(track: "BASS" | "SYNTH") {
@@ -909,7 +913,34 @@ export default function Home() {
 
   function strudelMiniFor(track: TrackId) {
     const length = lengthsRef.current[track] || STEPS;
-    return patternRef.current[track].slice(0, length).map((step) => (step.active ? (track === "KICK" ? "bd" : track === "HAT" ? "hh" : track === "PERC" ? "rim" : step.note?.toLowerCase() || "d1") : "~")).join(" ");
+    return patternRef.current[track]
+      .slice(0, length)
+      .map((step) => (step.active ? (track === "KICK" ? "bd" : track === "HAT" ? "hh" : track === "PERC" ? "rim" : step.note?.toLowerCase() || "d1") : "~"))
+      .join(" ");
+  }
+
+  function strudelNoteFor(track: TrackId) {
+    const length = lengthsRef.current[track] || STEPS;
+    return patternRef.current[track]
+      .slice(0, length)
+      .map((step, index) => {
+        if (!step.active) return "~";
+        if (track === "KICK") return "c1";
+        if (track === "HAT") return index % 4 === 2 ? "f#6" : "~";
+        if (track === "PERC") return index % 8 === 5 ? "a#2" : "c2";
+        return (step.note || (track === "BASS" ? `${bassRef.current.root}1` : scaleNote(bassRef.current.root, synthRef.current.scale, index, 3))).toLowerCase();
+      })
+      .join(" ");
+  }
+
+  function withStrudelShape(pattern: StrudelPattern, gain: number, cutoff: number, q = 2, drive = 0) {
+    // Keep this chain limited to broadly-supported Strudel WebAudio methods.
+    // The goal is not fallback; this is Strudel's own synth engine using note().s(...).
+    return pattern
+      .gain(gain)
+      .lpf(cutoff)
+      .lpq(q)
+      .distort(drive) as StrudelPattern;
   }
 
   async function playStrudel() {
@@ -917,40 +948,50 @@ export default function Home() {
     try { Tone.Transport.stop(); } catch {}
     try { sequenceRef.current?.dispose(); } catch {}
     sequenceRef.current = null;
+
     const strudel = await loadStrudelModules();
     if (!strudel) {
-      setStatus("Strudel unavailable");
+      setStatus("Strudel modules unavailable");
       return;
     }
+
     try {
-      strudel.initAudioOnFirstClick?.();
+      setStatus("Starting Strudel audio...");
+      await strudel.initAudio?.();
+      await strudel.initAudioOnFirstClick?.();
       const ctx = strudel.getAudioContext?.();
+      if (ctx?.state === "suspended") await ctx.resume();
+
+      try { strudel.samples?.("github:tidalcycles/dirt-samples"); } catch {}
+
       const repl = strudel.repl({
         defaultOutput: strudel.webaudioOutput,
-        getTime: () => ctx?.currentTime ?? 0,
+        getTime: () => strudel.getAudioContext?.()?.currentTime ?? 0,
       });
       strudelSchedulerRef.current = repl.scheduler;
-      const S = strudel.sound;
+
       const N = strudel.note;
       const Stack = strudel.stack;
       const synthWave = synthRef.current.chordMode === "dark" || synthRef.current.mood === "acid" ? "sawtooth" : "triangle";
-      repl.scheduler.setPattern(Stack(
-        S(strudelMiniFor("KICK")).gain(1.0).distort(mapRange(fxRef.current.distortion, 0, 100, 0.02, 0.36)),
-        S(strudelMiniFor("HAT")).gain(0.2).hpf(mapRange(xyRef.current.x, 0, 1, 5600, 9800)),
-        S(strudelMiniFor("PERC")).gain(0.22).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.28)),
-        N(strudelMiniFor("BASS")).s("sawtooth").gain(0.56).lpf(mapRange(bassRef.current.energy, 0, 100, 160, 1800)).lpq(mapRange(bassRef.current.acid, 0, 100, 2, 11)),
-        N(strudelMiniFor("SYNTH")).s(synthWave).gain(mapRange(synthRef.current.tension, 0, 100, 0.08, 0.22)).lpf(mapRange(synthRef.current.filterCutoff ?? synthRef.current.brightness, 0, 100, 360, 5400)).lpq(mapRange(synthRef.current.resonance ?? synthRef.current.tension, 0, 100, 1, 9)).room(mapRange(synthRef.current.space, 0, 100, 0.02, 0.3)).delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.18))
-      ));
+      const kick = withStrudelShape(N(strudelNoteFor("KICK")).s("sine"), 0.92, 120, 1.2, mapRange(fxRef.current.distortion, 0, 100, 0.01, 0.32));
+      const hat = withStrudelShape(N(strudelNoteFor("HAT")).s("triangle"), 0.12, mapRange(xyRef.current.x, 0, 1, 5000, 10500), 0.8, 0.02).hpf(mapRange(xyRef.current.x, 0, 1, 4400, 9000));
+      const perc = withStrudelShape(N(strudelNoteFor("PERC")).s("triangle"), 0.2, 1700, 5.5, 0.05).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.34));
+      const bassLine = withStrudelShape(N(strudelNoteFor("BASS")).s("sawtooth"), 0.58, mapRange(bassRef.current.energy, 0, 100, 160, 3200), mapRange(bassRef.current.acid, 0, 100, 2, 14), mapRange(bassRef.current.drive, 0, 100, 0.02, 0.65));
+      const synthLine = withStrudelShape(N(strudelNoteFor("SYNTH")).s(synthWave), mapRange(synthRef.current.tension, 0, 100, 0.08, 0.26), mapRange(synthRef.current.filterCutoff ?? synthRef.current.brightness, 0, 100, 260, 9800), mapRange(synthRef.current.resonance ?? synthRef.current.tension, 0, 100, 1, 12), mapRange(fxRef.current.distortion, 0, 100, 0, 0.2))
+        .room(mapRange(synthRef.current.space, 0, 100, 0.02, 0.42))
+        .delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.36));
+
+      repl.scheduler.setPattern(Stack(kick, hat, perc, bassLine, synthLine));
       repl.scheduler.start();
       transportRunningRef.current = true;
       setPlaying(true);
-      setStatus("Strudel engine playing");
+      setStatus(`Strudel engine playing${ctx ? ` (${ctx.state})` : ""}`);
     } catch (error) {
       console.error(error);
       stopStrudelEngine();
       transportRunningRef.current = false;
       setPlaying(false);
-      setStatus("Strudel engine failed");
+      setStatus("Strudel engine failed to start audio");
     }
   }
 
@@ -1460,6 +1501,46 @@ export default function Home() {
     }
   }
 
+  function slamSound(mode: "dry" | "open" | "acid" | "crush" | "void" | "cut") {
+    if (mode === "dry") {
+      setFx((prev) => ({ ...prev, delay: 0, reverb: 0, feedback: 0, freeze: 0, distortion: Math.min(prev.distortion, 10), glitch: 0 }));
+      setTexture((prev) => ({ ...prev, drone: 0, noise: 0 }));
+      setStatus("Abrupt: DRY");
+      return;
+    }
+    if (mode === "cut") {
+      setSynth((prev) => ({ ...prev, filterCutoff: 4, resonance: 72, eqHigh: 6, space: 4 }));
+      setBass((prev) => ({ ...prev, energy: 18, acid: 68 }));
+      setStatus("Abrupt: FILTER CUT");
+      return;
+    }
+    if (mode === "open") {
+      setSynth((prev) => ({ ...prev, filterCutoff: 96, resonance: 46, brightness: 88, eqHigh: 72, tension: 54 }));
+      setBass((prev) => ({ ...prev, energy: 92, acid: 58 }));
+      setStatus("Abrupt: OPEN");
+      return;
+    }
+    if (mode === "acid") {
+      setBass((prev) => ({ ...prev, acid: 96, drive: 82, energy: 78, motion: 64 }));
+      setSynth((prev) => ({ ...prev, resonance: 78, filterCutoff: 58, chordMode: "single", arpMode: "ratchet", arpRate: 70 }));
+      setFx((prev) => ({ ...prev, distortion: 46, delay: 18, feedback: 18 }));
+      setStatus("Abrupt: ACID");
+      return;
+    }
+    if (mode === "crush") {
+      setFx((prev) => ({ ...prev, distortion: 94, glitch: 54, feedback: 28, delay: 12 }));
+      setSynth((prev) => ({ ...prev, resonance: 90, eqMid: 18, eqHigh: 26 }));
+      setStatus("Abrupt: CRUSH");
+      return;
+    }
+    if (mode === "void") {
+      setFx((prev) => ({ ...prev, reverb: 92, delay: 76, feedback: 74, freeze: 62, distortion: 22 }));
+      setTexture((prev) => ({ ...prev, drone: 22, noise: 8, darkness: 92 }));
+      setSynth((prev) => ({ ...prev, space: 88, filterCutoff: 28, resonance: 52 }));
+      setStatus("Abrupt: VOID");
+    }
+  }
+
   function handlePad(e: React.PointerEvent<HTMLElement>, active = true) {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = clamp01((e.clientX - rect.left) / rect.width);
@@ -1711,6 +1792,19 @@ export default function Home() {
           grid-template-columns: minmax(128px, 1fr) minmax(128px, 1fr);
         }
 
+        .abrupt-card .engine-controls {
+          grid-template-columns: repeat(3, minmax(96px, 1fr));
+        }
+
+        .abrupt-card .master-action {
+          min-height: 118px;
+        }
+
+        .abrupt-card .master-action button {
+          border-color: color-mix(in srgb, var(--accent) 56%, rgba(255,255,255,.16));
+          box-shadow: 0 0 18px color-mix(in srgb, var(--accent) 14%, transparent);
+        }
+
         .master-readout,
         .master-action,
         .master-status {
@@ -1891,7 +1985,7 @@ export default function Home() {
           <div className="phase-brand">
             <span className="phase-mark"><Disc3 size={24} /></span>
             <div>
-              <h1>PHASE SYNTH v1.2</h1>
+              <h1>PHASE STRUDEL v1.3</h1>
               <p>Hybrid generative techno instrument</p>
               <span className="phase-version">PHASE PATCH v1.2 · CHORD ARP EQ</span>
             </div>
@@ -2136,6 +2230,15 @@ export default function Home() {
             <RotaryKnob label="Feedback" value={fx.feedback} onChange={(value) => updateEngine(setFx, "feedback", value)} />
             <RotaryKnob label="Freeze" value={fx.freeze} onChange={(value) => updateEngine(setFx, "freeze", value)} />
             <RotaryKnob label="Glitch" value={fx.glitch} onChange={(value) => updateEngine(setFx, "glitch", value)} />
+          </EngineCard>
+
+          <EngineCard title="Abrupt Sound Control" accent="#ff4f91" className="master-card abrupt-card">
+            <div className="master-action"><span>Dry</span><button onClick={() => slamSound("dry")}>DRY</button></div>
+            <div className="master-action"><span>Cut</span><button onClick={() => slamSound("cut")}>CUT</button></div>
+            <div className="master-action"><span>Open</span><button onClick={() => slamSound("open")}>OPEN</button></div>
+            <div className="master-action"><span>Acid</span><button onClick={() => slamSound("acid")}>ACID</button></div>
+            <div className="master-action"><span>Crush</span><button onClick={() => slamSound("crush")}>CRUSH</button></div>
+            <div className="master-action"><span>Void</span><button onClick={() => slamSound("void")}>VOID</button></div>
           </EngineCard>
 
           <EngineCard title="Master" accent="#ffb454" className="master-card">
