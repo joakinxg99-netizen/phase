@@ -22,6 +22,8 @@ type EngineMode = "tone" | "strudel";
 type RootNote = "C" | "C#" | "D" | "D#" | "E" | "F" | "F#" | "G" | "G#" | "A" | "A#" | "B";
 type ScaleName = "minor" | "dorian" | "phrygian" | "harmonic" | "pentatonic";
 type MoodName = "noir" | "hypnotic" | "acid" | "ritual" | "aerial";
+type ChordMode = "single" | "fifth" | "minor" | "minor7" | "sus2" | "sus4" | "dark";
+type ArpMode = "off" | "up" | "down" | "random" | "pendulum" | "ratchet";
 type PerformanceAction = "MORPH" | "BUILD" | "STRIP" | "HOLD" | "SHIFT" | "FRACTURE" | "BURST" | "INIT";
 
 interface Step {
@@ -66,10 +68,18 @@ interface BassEngine {
 interface SynthEngine {
   scale: ScaleName;
   mood: MoodName;
+  chordMode: ChordMode;
+  arpMode: ArpMode;
+  arpRate: number;
   tension: number;
   movement: number;
   space: number;
   brightness: number;
+  filterCutoff: number;
+  resonance: number;
+  eqLow: number;
+  eqMid: number;
+  eqHigh: number;
 }
 
 interface TextureEngine {
@@ -107,6 +117,7 @@ interface AudioRig {
   bassFilter: Tone.Filter;
   bassDrive: Tone.Distortion;
   synth: Tone.PolySynth<Tone.Synth>;
+  synthEq: Tone.EQ3;
   synthFilter: Tone.Filter;
   textureDrone: Tone.Oscillator;
   textureNoise: Tone.Noise;
@@ -229,6 +240,18 @@ const SCALE_INTERVALS: Record<ScaleName, number[]> = {
   pentatonic: [0, 3, 5, 7, 10],
 };
 
+const CHORD_INTERVALS: Record<ChordMode, number[]> = {
+  single: [0],
+  fifth: [0, 7],
+  minor: [0, 3, 7],
+  minor7: [0, 3, 7, 10],
+  sus2: [0, 2, 7],
+  sus4: [0, 5, 7],
+  dark: [0, 1, 7, 10],
+};
+const CHORD_MODES: ChordMode[] = ["single", "fifth", "minor", "minor7", "sus2", "sus4", "dark"];
+const ARP_MODES: ArpMode[] = ["off", "up", "down", "random", "pendulum", "ratchet"];
+
 const DEFAULT_RHYTHM: RhythmEngine = {
   density: 40,
   groove: 20,
@@ -250,10 +273,18 @@ const DEFAULT_BASS: BassEngine = {
 const DEFAULT_SYNTH: SynthEngine = {
   scale: "phrygian",
   mood: "noir",
+  chordMode: "fifth",
+  arpMode: "off",
+  arpRate: 28,
   tension: 20,
   movement: 20,
   space: 20,
   brightness: 25,
+  filterCutoff: 32,
+  resonance: 28,
+  eqLow: 48,
+  eqMid: 42,
+  eqHigh: 36,
 };
 
 const DEFAULT_TEXTURE: TextureEngine = {
@@ -619,10 +650,11 @@ export default function Home() {
     }).connect(bassDrive);
 
     const synthFilter = new Tone.Filter({ type: "lowpass", frequency: 980, rolloff: -24, Q: 0.55 }).connect(trackVolumes.SYNTH);
+    const synthEq = new Tone.EQ3({ low: -1.5, mid: -2, high: -4 }).connect(synthFilter);
     const synthVoice = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: "triangle" },
       envelope: { attack: 0.018, decay: 0.24, sustain: 0.035, release: 0.32 },
-    }).connect(synthFilter);
+    }).connect(synthEq);
 
     const textureGain = new Tone.Gain(0).connect(drive);
     const textureFilter = new Tone.Filter({ type: "lowpass", frequency: 140, Q: 0.25, rolloff: -24 }).connect(textureGain);
@@ -639,6 +671,7 @@ export default function Home() {
       bassFilter,
       bassDrive,
       synth: synthVoice,
+      synthEq,
       synthFilter,
       textureDrone,
       textureNoise,
@@ -676,9 +709,13 @@ export default function Home() {
     if (!rig) return;
     const next = synthRef.current;
     const x = xyRef.current.x;
-    rig.synthFilter.frequency.value = mapRange(next.brightness * 0.7 + x * 100 * 0.5, 0, 120, 420, 5200);
-    rig.synthFilter.Q.value = mapRange(next.tension, 0, 100, 0.35, 2.4);
-    rig.trackVolumes.SYNTH.volume.value = mapRange(next.mood === "aerial" ? next.space : next.tension, 0, 100, -19, -9);
+    const cutoffMacro = next.filterCutoff ?? next.brightness;
+    rig.synthFilter.frequency.value = mapRange(cutoffMacro * 0.85 + next.brightness * 0.45 + x * 100 * 0.35, 0, 165, 280, 7600);
+    rig.synthFilter.Q.value = mapRange(next.resonance ?? next.tension, 0, 100, 0.35, 5.6);
+    rig.synthEq.low.value = mapRange(next.eqLow ?? 50, 0, 100, -10, 5);
+    rig.synthEq.mid.value = mapRange(next.eqMid ?? 50, 0, 100, -12, 4);
+    rig.synthEq.high.value = mapRange(next.eqHigh ?? 50, 0, 100, -14, 5);
+    rig.trackVolumes.SYNTH.volume.value = mapRange(next.mood === "aerial" ? next.space : next.tension, 0, 100, -21, -8);
   }
 
   function applyTextureEngine() {
@@ -753,6 +790,26 @@ export default function Home() {
     }));
   }
 
+
+  function buildSynthChord(root: string) {
+    const mode = synthRef.current.chordMode || "fifth";
+    const intervals = CHORD_INTERVALS[mode] || CHORD_INTERVALS.fifth;
+    return intervals.map((interval) => Tone.Frequency(root).transpose(interval).toNote());
+  }
+
+  function pickArpNote(notes: string[], stepIndex: number, repeatIndex: number) {
+    const mode = synthRef.current.arpMode || "off";
+    if (mode === "off" || notes.length <= 1) return notes;
+    if (mode === "up" || mode === "ratchet") return [notes[(stepIndex + repeatIndex) % notes.length]];
+    if (mode === "down") return [notes[(notes.length - 1 - ((stepIndex + repeatIndex) % notes.length) + notes.length) % notes.length]];
+    if (mode === "pendulum") {
+      const cycle = notes.length * 2 - 2 || 1;
+      const pos = (stepIndex + repeatIndex) % cycle;
+      return [notes[pos < notes.length ? pos : cycle - pos]];
+    }
+    if (mode === "random") return [pick(notes)];
+    return notes;
+  }
   function triggerTrack(track: TrackId, step: Step, index: number, time: number) {
     const rig = rigRef.current;
     if (!rig || !step.active) return;
@@ -793,8 +850,18 @@ export default function Home() {
       }
       if (track === "SYNTH") {
         const root = step.note || scaleNote(bassRef.current.root, synthRef.current.scale, index, 3);
-        const chord = synthRef.current.tension > 72 ? [root, Tone.Frequency(root).transpose(3).toNote(), Tone.Frequency(root).transpose(10).toNote()] : [root, Tone.Frequency(root).transpose(7).toNote()];
-        rig.synth.triggerAttackRelease(chord, synthRef.current.space > 68 ? "8n" : "16n", t, velocity * 0.22);
+        const chord = buildSynthChord(root);
+        const arpMode = synthRef.current.arpMode || "off";
+        const toneVelocity = velocity * mapRange(synthRef.current.tension + synthRef.current.brightness, 0, 200, 0.16, 0.34);
+        if (arpMode === "ratchet") {
+          const hits = Math.max(2, Math.min(5, Math.round(mapRange(synthRef.current.arpRate || 28, 0, 100, 2, 5))));
+          const window = Tone.Time("16n").toSeconds();
+          for (let a = 0; a < hits; a += 1) {
+            rig.synth.triggerAttackRelease(pickArpNote(chord, index, a), "64n", t + (window / hits) * a, toneVelocity * 0.72);
+          }
+        } else {
+          rig.synth.triggerAttackRelease(pickArpNote(chord, index, r), synthRef.current.space > 68 ? "8n" : "16n", t, toneVelocity);
+        }
       }
     }
   }
@@ -866,12 +933,13 @@ export default function Home() {
       const S = strudel.sound;
       const N = strudel.note;
       const Stack = strudel.stack;
+      const synthWave = synthRef.current.chordMode === "dark" || synthRef.current.mood === "acid" ? "sawtooth" : "triangle";
       repl.scheduler.setPattern(Stack(
-        S(strudelMiniFor("KICK")).gain(1.02).distort(mapRange(fxRef.current.distortion, 0, 100, 0.03, 0.42)),
-        S(strudelMiniFor("HAT")).gain(0.22).hpf(mapRange(xyRef.current.x, 0, 1, 5200, 9800)),
-        S(strudelMiniFor("PERC")).gain(0.24).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.34)),
-        N(strudelMiniFor("BASS")).s("sawtooth").gain(0.62).lpf(mapRange(bassRef.current.energy, 0, 100, 180, 1900)).lpq(mapRange(bassRef.current.acid, 0, 100, 2, 12)),
-        N(strudelMiniFor("SYNTH")).s("triangle").gain(0.15).room(mapRange(synthRef.current.space, 0, 100, 0.02, 0.34)).delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.24))
+        S(strudelMiniFor("KICK")).gain(1.0).distort(mapRange(fxRef.current.distortion, 0, 100, 0.02, 0.36)),
+        S(strudelMiniFor("HAT")).gain(0.2).hpf(mapRange(xyRef.current.x, 0, 1, 5600, 9800)),
+        S(strudelMiniFor("PERC")).gain(0.22).room(mapRange(fxRef.current.reverb, 0, 100, 0, 0.28)),
+        N(strudelMiniFor("BASS")).s("sawtooth").gain(0.56).lpf(mapRange(bassRef.current.energy, 0, 100, 160, 1800)).lpq(mapRange(bassRef.current.acid, 0, 100, 2, 11)),
+        N(strudelMiniFor("SYNTH")).s(synthWave).gain(mapRange(synthRef.current.tension, 0, 100, 0.08, 0.22)).lpf(mapRange(synthRef.current.filterCutoff ?? synthRef.current.brightness, 0, 100, 360, 5400)).lpq(mapRange(synthRef.current.resonance ?? synthRef.current.tension, 0, 100, 1, 9)).room(mapRange(synthRef.current.space, 0, 100, 0.02, 0.3)).delay(mapRange(fxRef.current.delay, 0, 100, 0, 0.18))
       ));
       repl.scheduler.start();
       transportRunningRef.current = true;
@@ -1236,7 +1304,7 @@ export default function Home() {
     setEngineMode(preset.engineMode || "tone");
     setRhythm(preset.rhythm);
     setBass(preset.bass);
-    setSynth(preset.synth);
+    setSynth({ ...DEFAULT_SYNTH, ...preset.synth });
     setTexture(preset.texture);
     setFx(preset.fx);
     setXy(preset.xy);
@@ -1627,6 +1695,18 @@ export default function Home() {
           grid-column: span 1;
         }
 
+        .engine-card.synth-wide {
+          grid-column: span 2;
+        }
+
+        .engine-card.synth-wide .engine-controls {
+          grid-template-columns: repeat(4, minmax(104px, 1fr));
+        }
+
+        .engine-card.synth-filter-engine .engine-controls {
+          grid-template-columns: repeat(5, minmax(104px, 1fr));
+        }
+
         .master-card .engine-controls {
           grid-template-columns: minmax(128px, 1fr) minmax(128px, 1fr);
         }
@@ -1811,9 +1891,9 @@ export default function Home() {
           <div className="phase-brand">
             <span className="phase-mark"><Disc3 size={24} /></span>
             <div>
-              <h1>PHASE STEPS v1.1</h1>
+              <h1>PHASE SYNTH v1.2</h1>
               <p>Hybrid generative techno instrument</p>
-              <span className="phase-version">PHASE PATCH v1.0 · TECHNO DEFAULT</span>
+              <span className="phase-version">PHASE PATCH v1.2 · CHORD ARP EQ</span>
             </div>
           </div>
 
@@ -2020,13 +2100,24 @@ export default function Home() {
             <RotaryKnob label="Energy" value={bass.energy} onChange={(value) => updateEngine(setBass, "energy", value)} />
           </EngineCard>
 
-          <EngineCard title="Synth Engine" accent="#78ffe5" className="synth-engine">
+          <EngineCard title="Synth Engine" accent="#78ffe5" className="synth-engine synth-wide">
             <Select label="Scale" value={synth.scale} values={Object.keys(SCALE_INTERVALS)} onChange={(value) => updateEngine(setSynth, "scale", value as ScaleName)} />
             <Select label="Mood" value={synth.mood} values={["noir", "hypnotic", "acid", "ritual", "aerial"]} onChange={(value) => updateEngine(setSynth, "mood", value as MoodName)} />
+            <Select label="Chord" value={synth.chordMode || "fifth"} values={CHORD_MODES} onChange={(value) => updateEngine(setSynth, "chordMode", value as ChordMode)} />
+            <Select label="Arp" value={synth.arpMode || "off"} values={ARP_MODES} onChange={(value) => updateEngine(setSynth, "arpMode", value as ArpMode)} />
+            <RotaryKnob label="Arp Rate" value={synth.arpRate ?? 28} onChange={(value) => updateEngine(setSynth, "arpRate", value)} />
             <RotaryKnob label="Tension" value={synth.tension} onChange={(value) => updateEngine(setSynth, "tension", value)} />
             <RotaryKnob label="Move" value={synth.movement} onChange={(value) => updateEngine(setSynth, "movement", value)} />
             <RotaryKnob label="Space" value={synth.space} onChange={(value) => updateEngine(setSynth, "space", value)} />
             <RotaryKnob label="Bright" value={synth.brightness} onChange={(value) => updateEngine(setSynth, "brightness", value)} />
+          </EngineCard>
+
+          <EngineCard title="Synth EQ + Filter" accent="#78ffe5" className="synth-filter-engine synth-wide">
+            <RotaryKnob label="Cutoff" value={synth.filterCutoff ?? synth.brightness} onChange={(value) => updateEngine(setSynth, "filterCutoff", value)} />
+            <RotaryKnob label="Resonance" value={synth.resonance ?? synth.tension} onChange={(value) => updateEngine(setSynth, "resonance", value)} />
+            <RotaryKnob label="EQ Low" value={synth.eqLow ?? 48} onChange={(value) => updateEngine(setSynth, "eqLow", value)} />
+            <RotaryKnob label="EQ Mid" value={synth.eqMid ?? 42} onChange={(value) => updateEngine(setSynth, "eqMid", value)} />
+            <RotaryKnob label="EQ High" value={synth.eqHigh ?? 36} onChange={(value) => updateEngine(setSynth, "eqHigh", value)} />
           </EngineCard>
 
           <EngineCard title="Texture Engine" accent="#39e7ff">
