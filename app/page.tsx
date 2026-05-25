@@ -3,7 +3,7 @@
 import {
   useEffect, useRef, useState, useCallback, useMemo, memo
 } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 
 type AnyObj = Record<string, any>;
 type Grid = boolean[][];
@@ -127,7 +127,6 @@ function clamp(v: number, lo=0, hi=1): number {
 }
 function rand(n: number): number { return Math.floor(Math.random()*n); }
 
-// ─── Deterministic audio param computation — NO Math.random() allowed here ───
 interface AudioParams {
   kickStr: string; kickGain: number;
   hatStr: string; hatGain: number;
@@ -154,17 +153,14 @@ function computeAudioParams(
   volumes: number[],
   isGlitch: boolean
 ): AudioParams {
-  // All macros 0–1, deterministic
   const darkness = macros[1].value / 100;
   const motion   = macros[2].value / 100;
   const acid     = macros[3].value / 100;
   const space    = macros[4].value / 100;
   const density  = macros[5].value / 100;
-
-  // XY: X = brightness + stereo width, Y = wetness + depth
   const xyB = xy.x;
-  const xyD = 1 - xy.y;     // 0 = top/dry, 1 = bottom/wet
-  const xyW = xy.x;         // left = narrow, right = wide
+  const xyD = 1 - xy.y;
+  const xyW = xy.x;
 
   const hasSolo = Object.values(soloMute).some(v => v === "solo");
   function effectiveGain(name: string, base: number): number {
@@ -176,17 +172,14 @@ function computeAudioParams(
     return clamp(base * vol * master);
   }
 
-  // ── KICK — deterministic
   const kickStr  = rowToSound(grid[0], "bd");
   const kickGain = effectiveGain("KICK", 0.94 + density * 0.06);
 
-  // ── HAT — density changes density via pattern modification (done upstream), deterministic here
   const hatStr  = isGlitch
     ? "hh hh hh hh hh hh hh hh hh hh hh hh hh hh hh hh"
     : rowToSound(grid[1], "hh");
   const hatGain = effectiveGain("HAT", 0.48 + density * 0.18);
 
-  // ── PERC — fully deterministic, isolated
   const percSnd  = PERC_SOUND_MAP[pm.type] || "rim";
   const percStr  = isGlitch
     ? `${percSnd} ~ ${percSnd} ${percSnd} ~ ${percSnd} ~ ~ ${percSnd} ~ ~ ${percSnd} ~ ${percSnd} ~ ~`
@@ -195,38 +188,22 @@ function computeAudioParams(
   const percRoom = clamp((pm.space / 100) * 0.72 + space * 0.10, 0, 0.82);
   const percGain = effectiveGain("PERC", 0.42 + (pm.snap / 100) * 0.44);
 
-  // ── BASS — deterministic, decay shapes cutoff envelope feel
   const chord    = chords[0] || "Dm7";
   const bassSeq  = CHORD_TO_BASS[chord] || CHORD_TO_BASS["Dm7"];
   const bassNotes = rowToMini(grid[3], bassSeq);
-  // baseCut: darkness lowers it, xyB opens it
   const baseCut  = Math.round(55 + (bm.cutoff/100)*840 + (1-darkness)*440 + xyB*500);
-  // acidRes: sharp lpf spike above cutoff
   const bassLpf  = Math.round(baseCut + acid*(bm.acidRes/100)*700 + (bm.drive/100)*200);
-  // punch: base gain boost
   const bassGain = effectiveGain("BASS", 0.46 + darkness*0.24 + (bm.punch/100)*0.28);
-  // DECAY REAL: shorter decay = lower decayCut (tighter stab), longer = more open
-  // We expose this as a second cutoff value that the pattern uses for the "off" state simulation
-  // In Strudel, we model decay by reducing lpf on lower decay values
   const bassDecayNote = Math.round(baseCut * (0.25 + (bm.decay / 100) * 0.75));
-
-  // ── DRIVE — applied as gain multiplier on entire output (global coloration)
-  // Drive 0=clean, 100=heavy saturation; baked into gain push
   const driveMul = 1 + (fx.drive / 100) * 0.55;
 
-  // ── SYNTH — deterministic supersaw-like
   const synthSeq   = CHORD_TO_SYNTH[chord] || CHORD_TO_SYNTH["Dm7"];
   const synthNotes = rowToMini(grid[4], synthSeq);
   const synthCut   = Math.round(320 + (sm.cutoff/100)*4400 + (1-darkness)*900 + xyB*1900);
   const synthLpf   = Math.round(synthCut + acid*640 + (sm.motion/100)*400);
-  // DELAY: synth delay + motion + xyDepth + fx.delay — all deterministic
   const synthDelay = clamp(0.05 + (sm.delay/100)*0.48 + motion*0.18 + xyD*0.28 + (fx.delay/100)*0.22);
-  // ROOM: synth space + space macro + xyDepth + fx.reverb
   const synthRoom  = clamp(0.07 + (sm.space/100)*0.58 + space*0.32 + xyD*0.30 + (fx.reverb/100)*0.18);
-  // WIDTH: modulates stereo detune amount; higher = wider
-  // xyW (x axis) also widens
   const synthWidth  = clamp((sm.width / 100) * 0.8 + xyW * 0.2, 0, 1);
-  // DETUNE: pitch spread for supersaw feel; real detune value in semitones * 0.01
   const synthDetune = (sm.detune / 100) * 0.18 + synthWidth * 0.06;
   const synthGain   = effectiveGain("SYNTH", clamp(0.20 + density*0.10 + (sm.motion/100)*0.06) * (1 + synthDetune));
 
@@ -264,6 +241,8 @@ export default function Home() {
   const [vuLevels, setVuLevels]   = useState<number[]>([0,0,0,0,0,0]);
   const [waveAmps, setWaveAmps]   = useState<number[]>(() => Array.from({length:28},()=>0.15));
   const [glitching, setGlitching] = useState(false);
+  // Grid ref for playhead positioning
+  const gridContainerRef = useRef<HTMLDivElement>(null);
 
   const schedulerRef  = useRef<any>(null);
   const strudelRef    = useRef<AnyObj|null>(null);
@@ -275,7 +254,6 @@ export default function Home() {
   const origGrid      = useRef<Grid>(makeGrid());
   const pointerCapRef = useRef<number|null>(null);
 
-  // Single live ref — updated every render, no stale closures
   const liveRef = useRef({
     grid, macros, soloMute, volumes, xyPos, fxValues,
     synthMod, bassMod, percMod, chords, bpm, glitch: false,
@@ -286,7 +264,6 @@ export default function Home() {
     glitch: liveRef.current.glitch,
   };
 
-  // ── VU + waveform — use liveRef to avoid effect re-runs
   useEffect(() => {
     if (!playing) {
       setVuLevels([0,0,0,0,0,0]);
@@ -298,17 +275,14 @@ export default function Home() {
       frame++;
       const { soloMute: sm, volumes: vols } = liveRef.current;
       const hasSolo = Object.values(sm).some(v => v === "solo");
-      // Deterministic oscillation based on frame count — no Math.random in hot path for audio
       setVuLevels(prev => prev.map((_,i) => {
         const name = TRACKS[i] || "MASTER";
         const muted = sm[name] === "mute" || (hasSolo && sm[name] !== "solo");
         if (muted) return Math.max(0, prev[i] - 0.14);
         const vol = i < vols.length ? vols[i] : vols[5];
-        // Pseudo-random but based on frame + channel, not true random
         const osc = 0.30 + 0.22 * Math.abs(Math.sin(frame * 0.37 + i * 1.3));
         return clamp(osc * vol);
       }));
-      // Waveform: deterministic oscillation
       setWaveAmps(Array.from({length:28}, (_,i) =>
         0.08 + 0.82 * Math.abs(Math.sin(frame * 0.23 + i * 0.44))
       ));
@@ -316,7 +290,6 @@ export default function Home() {
     return () => { if (vuTimer.current) clearInterval(vuTimer.current); };
   }, [playing]);
 
-  // ── Strudel init
   const initEngine = useCallback(async () => {
     if (schedulerRef.current && strudelRef.current) return;
     const strudel: AnyObj = await import("@strudel/web");
@@ -332,7 +305,6 @@ export default function Home() {
     if (!schedulerRef.current) throw new Error("Strudel scheduler not found.");
   }, []);
 
-  // ── Pattern builder — reads liveRef, 100% deterministic
   const buildPattern = useCallback(() => {
     const strudel = strudelRef.current;
     const s     = strudel?.s     || (globalThis as AnyObj).s;
@@ -349,8 +321,6 @@ export default function Home() {
       lr.chords, lr.soloMute, lr.volumes,
       lr.glitch
     );
-
-    // Drive multiplier applied to all gains — simulates global saturation/coloring
     const d = p.driveMul;
 
     let kickPat: any;
@@ -366,76 +336,29 @@ export default function Home() {
       percPat = s(p.percStr).gain(clamp(p.percGain)).lpf(p.percLpf).room(p.percRoom);
     } catch { percPat = s("~ ~ rim ~").gain(0.44); }
 
-    // BASS: decay shapes lpf — shorter decay = tighter (lower decayLpf), longer = more open
-    // We use bassDecayNote as the lpf ceiling on the second half of the pattern
-    // In Strudel we simulate this via the lpf value itself (shorter decay → lower lpf)
     let bassPat: any;
     try {
-      const bassLpfFinal = Math.round(
-        p.bassLpf * (0.35 + (lr.bassMod.decay / 100) * 0.65)
-      );
-      bassPat = note(p.bassNotes)
-        .s("sawtooth")
-        .gain(clamp(p.bassGain * d))
-        .cutoff(p.bassCut)
-        .lpf(bassLpfFinal);
+      const bassLpfFinal = Math.round(p.bassLpf * (0.35 + (lr.bassMod.decay / 100) * 0.65));
+      bassPat = note(p.bassNotes).s("sawtooth").gain(clamp(p.bassGain * d)).cutoff(p.bassCut).lpf(bassLpfFinal);
     } catch { bassPat = note("d2 ~ f2 ~").s("sawtooth").gain(0.42); }
 
-    // SYNTH: supersaw simulation via two sawtooth layers detuned by synthDetune
-    // WIDTH: panning — layer A panned left, layer B panned right by synthWidth amount
-    // This is the real stereo width implementation
     let synthPat: any;
     try {
-      const detCents = Math.round(p.synthDetune * 100); // semitone fraction → approximate cents
-      // Layer A: base pitch, panned slightly left by width
       const panA = clamp(0.5 - p.synthWidth * 0.45, 0, 1);
-      // Layer B: detuned up slightly, panned right
       const panB = clamp(0.5 + p.synthWidth * 0.45, 0, 1);
       const gainA = clamp(p.synthGain * 0.55);
       const gainB = clamp(p.synthGain * 0.50);
-
-      let layerA: any = note(p.synthNotes)
-        .s("sawtooth")
-        .gain(gainA)
-        .cutoff(p.synthCut)
-        .lpf(p.synthLpf)
-        .delay(p.synthDelay)
-        .room(p.synthRoom);
-
-      // Detune layer B by adding semitone offset — Strudel note() accepts "d4+0.12" style
-      // Use .add() if available, else fall back to same notes
+      let layerA: any = note(p.synthNotes).s("sawtooth").gain(gainA).cutoff(p.synthCut).lpf(p.synthLpf).delay(p.synthDelay).room(p.synthRoom);
       let layerB: any;
       try {
-        layerB = note(p.synthNotes)
-          .s("sawtooth")
-          .gain(gainB)
-          .cutoff(Math.round(p.synthCut * 0.97))
-          .lpf(p.synthLpf)
-          .delay(clamp(p.synthDelay + 0.008))
-          .room(p.synthRoom);
-      } catch {
-        layerB = layerA;
-      }
-
-      // Try to apply pan if available
-      try {
-        layerA = layerA.pan(panA);
-        layerB = layerB.pan(panB);
-      } catch {}
-
+        layerB = note(p.synthNotes).s("sawtooth").gain(gainB).cutoff(Math.round(p.synthCut * 0.97)).lpf(p.synthLpf).delay(clamp(p.synthDelay + 0.008)).room(p.synthRoom);
+      } catch { layerB = layerA; }
+      try { layerA = layerA.pan(panA); layerB = layerB.pan(panB); } catch {}
       synthPat = stack(layerA, layerB);
     } catch {
       try {
-        synthPat = note(p.synthNotes)
-          .s("sawtooth")
-          .gain(clamp(p.synthGain))
-          .cutoff(p.synthCut)
-          .lpf(p.synthLpf)
-          .delay(p.synthDelay)
-          .room(p.synthRoom);
-      } catch {
-        synthPat = note("d4 ~ f4 ~").s("sawtooth").gain(0.20);
-      }
+        synthPat = note(p.synthNotes).s("sawtooth").gain(clamp(p.synthGain)).cutoff(p.synthCut).lpf(p.synthLpf).delay(p.synthDelay).room(p.synthRoom);
+      } catch { synthPat = note("d4 ~ f4 ~").s("sawtooth").gain(0.20); }
     }
 
     return stack(kickPat, hatPat, percPat, bassPat, synthPat);
@@ -449,7 +372,6 @@ export default function Home() {
     else if ("bpm" in sc)   sc.bpm = val;
   }, []);
 
-  // Throttled rebuild — max once per 80ms to reduce CPU/audio glitches
   const rebuildPattern = useCallback(() => {
     if (!schedulerRef.current) return;
     if (rebuildTimer.current) return;
@@ -503,13 +425,11 @@ export default function Home() {
 
   useEffect(() => { if (playing) syncBpm(bpm); }, [bpm, playing, syncBpm]);
 
-  // ── Grid actions — randomness ONLY here, not in audio path
   const toggle = useCallback((row: number, col: number) => {
     setGrid(prev => prev.map((r,ri) => ri===row ? r.map((v,ci) => ci===col ? !v : v) : r));
   }, []);
 
   const mutate = useCallback(() => {
-    // All Math.random() lives here — NOT in audio engine
     const ki = rand(GROOVE_KICK.length);
     const hi = rand(GROOVE_HAT.length);
     const pi = rand(GROOVE_PERC.length);
@@ -523,7 +443,6 @@ export default function Home() {
   }, []);
 
   const evolve = useCallback(() => {
-    // Randomness here, not in audio path
     setGrid(prev => prev.map((row,ri) =>
       row.map((v,ci) => (ri===0 && ci===0) ? true : Math.random()>0.93 ? !v : v)
     ));
@@ -539,11 +458,9 @@ export default function Home() {
   }, []);
 
   const glitch = useCallback(() => {
-    // Musical glitch: ratchet burst — randomness ONLY in grid mutation, not audio params
     if (glitchTimer.current) clearTimeout(glitchTimer.current);
     liveRef.current.glitch = true;
     setGlitching(true);
-    // Stutter grid mutation — deterministic ratchet patterns chosen from pool
     const ri = rand(4);
     const ratchetHat = [
       [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
@@ -560,7 +477,7 @@ export default function Home() {
     setGrid(prev => prev.map((row,r) => {
       if (r===1) return ratchetHat[ri].map(v => !!v);
       if (r===2) return ratchetPerc[ri].map(v => !!v);
-      if (r===0) return row.map((v,i) => i%2===0 ? v : (i%4===1)); // stutter kick
+      if (r===0) return row.map((v,i) => i%2===0 ? v : (i%4===1));
       return row;
     }));
     if (playing) {
@@ -596,43 +513,31 @@ export default function Home() {
     setXyPos({x:0.5, y:0.5});
   }, []);
 
-  // ── XY Pad — improved touch/pointer capture for iPhone Safari
   const handleXyDown = useCallback((e: React.PointerEvent) => {
     if (!xyPadRef.current) return;
-    try {
-      xyPadRef.current.setPointerCapture(e.pointerId);
-      pointerCapRef.current = e.pointerId;
-    } catch {}
+    try { xyPadRef.current.setPointerCapture(e.pointerId); pointerCapRef.current = e.pointerId; } catch {}
     const r = xyPadRef.current.getBoundingClientRect();
-    setXyPos({
-      x: clamp((e.clientX - r.left) / r.width),
-      y: clamp((e.clientY - r.top)  / r.height),
-    });
+    setXyPos({ x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) });
   }, []);
 
   const handleXyMove = useCallback((e: React.PointerEvent) => {
     if (!xyPadRef.current || !(e.buttons & 1)) return;
     const r = xyPadRef.current.getBoundingClientRect();
-    setXyPos({
-      x: clamp((e.clientX - r.left) / r.width),
-      y: clamp((e.clientY - r.top)  / r.height),
-    });
+    setXyPos({ x: clamp((e.clientX - r.left) / r.width), y: clamp((e.clientY - r.top) / r.height) });
   }, []);
 
   const handleXyUp = useCallback((e: React.PointerEvent) => {
     if (!xyPadRef.current) return;
-    try {
-      if (pointerCapRef.current !== null) {
-        xyPadRef.current.releasePointerCapture(pointerCapRef.current);
-        pointerCapRef.current = null;
-      }
-    } catch {}
+    try { if (pointerCapRef.current !== null) { xyPadRef.current.releasePointerCapture(pointerCapRef.current); pointerCapRef.current = null; } } catch {}
   }, []);
 
-  // Memoized display values — avoid recalculating on every render
   const liveCodeBasscut  = useMemo(() => Math.round(55 + (bassMod.cutoff/100)*840), [bassMod.cutoff]);
   const liveCodeRoom     = useMemo(() => (macros[4].value/100*0.7+0.15).toFixed(2), [macros]);
   const liveCodePercLpf  = useMemo(() => Math.round(400+(percMod.tone/100)*8500), [percMod.tone]);
+
+  // Playhead position: each step cell is 1/16 of the grid width (after the 72px label column)
+  // We calculate the % position as (step + 0.5) / 16 of the grid area
+  const playheadPct = ((step + 0.5) / 16) * 100;
 
   return (
     <main style={{
@@ -642,12 +547,12 @@ export default function Home() {
       display:"flex", flexDirection:"column", overflow:"hidden", height:"100vh",
     }}>
 
-      {/* HEADER */}
+      {/* ── HEADER ── */}
       <header style={{
         display:"flex", alignItems:"center", justifyContent:"space-between",
         padding:"0 28px", height:72,
         borderBottom:"1px solid rgba(255,255,255,.06)",
-        background:"rgba(2,4,9,.85)", backdropFilter:"blur(30px)",
+        background:"rgba(2,4,9,.92)", backdropFilter:"blur(40px)",
         flexShrink:0, zIndex:100,
       }}>
         <div style={{display:"flex", alignItems:"center", gap:16}}>
@@ -656,10 +561,10 @@ export default function Home() {
               ? ["0 0 20px #8b5cf6","0 0 40px #22d3ee","0 0 20px #8b5cf6"]
               : "0 0 0px transparent"}}
             transition={{duration:2, repeat:Infinity}}
-            style={{fontSize:28, fontWeight:200, letterSpacing:14, color:"#fff"}}
+            style={{fontSize:26, fontWeight:200, letterSpacing:12, color:"#fff"}}
           >PHASE</motion.div>
-          <div style={{width:1, height:28, background:"rgba(255,255,255,.1)"}}/>
-          <span style={{fontSize:10, letterSpacing:3, opacity:.4}}>GEN INSTRUMENT v2</span>
+          <div style={{width:1, height:24, background:"rgba(255,255,255,.1)"}}/>
+          <span style={{fontSize:9, letterSpacing:3, opacity:.35, textTransform:"uppercase"}}>Gen Instrument v2</span>
           {glitching && (
             <motion.div
               animate={{opacity:[1,0,1], color:["#a3e635","#ec4899","#a3e635"]}}
@@ -669,77 +574,105 @@ export default function Home() {
           )}
         </div>
 
-        <div style={{display:"flex", alignItems:"center", gap:12}}>
-          <Chip>
-            <div style={{fontSize:9, letterSpacing:2, opacity:.5, marginBottom:2}}>BPM</div>
-            <div style={{fontSize:16, fontWeight:600, letterSpacing:2}}>{bpm}</div>
-          </Chip>
-          <div style={{display:"flex", flexDirection:"column", gap:3}}>
-            <button onClick={() => setBpm(b => Math.min(200,b+1))} style={microBtn()}>▲</button>
-            <button onClick={() => setBpm(b => Math.max(60, b-1))} style={microBtn()}>▼</button>
+        <div style={{display:"flex", alignItems:"center", gap:10}}>
+          {/* BPM */}
+          <div style={{display:"flex", alignItems:"center", gap:6, padding:"6px 12px", borderRadius:10, border:"1px solid rgba(255,255,255,.08)", background:"rgba(255,255,255,.03)"}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontSize:8, letterSpacing:2, opacity:.45, marginBottom:1}}>BPM</div>
+              <div style={{fontSize:18, fontWeight:600, letterSpacing:1, lineHeight:1}}>{bpm}</div>
+            </div>
+            <div style={{display:"flex", flexDirection:"column", gap:2}}>
+              <button onClick={() => setBpm(b => Math.min(200,b+1))} style={microBtn()}>▲</button>
+              <button onClick={() => setBpm(b => Math.max(60, b-1))} style={microBtn()}>▼</button>
+            </div>
           </div>
-          <Chip>
-            <div style={{fontSize:9, letterSpacing:2, opacity:.5, marginBottom:2}}>KEY</div>
-            <div style={{fontSize:14, fontWeight:600, letterSpacing:1}}>D MIN</div>
-          </Chip>
-          <div style={{width:1, height:40, background:"rgba(255,255,255,.07)", margin:"0 8px"}}/>
 
+          {/* Key */}
+          <div style={{padding:"6px 14px", borderRadius:10, border:"1px solid rgba(255,255,255,.08)", background:"rgba(255,255,255,.03)", textAlign:"center"}}>
+            <div style={{fontSize:8, letterSpacing:2, opacity:.45, marginBottom:1}}>KEY</div>
+            <div style={{fontSize:13, fontWeight:600, letterSpacing:1}}>D MIN</div>
+          </div>
+
+          <div style={{width:1, height:36, background:"rgba(255,255,255,.07)", margin:"0 4px"}}/>
+
+          {/* PLAY */}
           <motion.button
             onClick={playing ? stop : play}
             whileHover={{scale:1.06}} whileTap={{scale:0.94}}
             animate={{boxShadow: playing
-              ? ["0 0 0 0 rgba(139,92,246,.4)","0 0 0 16px rgba(139,92,246,.0)"]
-              : "0 0 24px rgba(139,92,246,.25)"}}
-            transition={playing ? {duration:1.4, repeat:Infinity} : {}}
+              ? ["0 0 0 0 rgba(139,92,246,.5)","0 0 0 14px rgba(139,92,246,.0)"]
+              : "0 0 20px rgba(139,92,246,.2)"}}
+            transition={playing ? {duration:1.2, repeat:Infinity} : {}}
             style={{
-              width:52, height:52, borderRadius:"50%",
-              border:"2px solid rgba(139,92,246,.7)",
+              width:48, height:48, borderRadius:"50%",
+              border:"2px solid rgba(139,92,246,.8)",
               background: playing
-                ? "linear-gradient(135deg,rgba(139,92,246,.4),rgba(34,211,238,.2))"
-                : "rgba(139,92,246,.12)",
-              color:"white", fontSize:18, cursor:"pointer",
+                ? "linear-gradient(135deg,rgba(139,92,246,.5),rgba(34,211,238,.25))"
+                : "rgba(139,92,246,.14)",
+              color:"white", fontSize:16, cursor:"pointer",
               display:"flex", alignItems:"center", justifyContent:"center",
+              boxShadow: playing ? undefined : "0 0 20px rgba(139,92,246,.2)",
             }}
           >{playing ? "■" : "▶"}</motion.button>
 
+          {/* REC */}
           <motion.button
             onClick={() => setRecActive(r => !r)}
+            title={recActive ? "Stop recording" : "Start recording"}
             animate={{backgroundColor: recActive
-              ? ["rgba(236,72,153,.6)","rgba(236,72,153,.2)"]
+              ? ["rgba(236,72,153,.65)","rgba(236,72,153,.2)"]
               : "rgba(255,255,255,.03)"}}
             transition={{duration:.8, repeat: recActive ? Infinity : 0}}
-            style={{width:40, height:40, borderRadius:"50%", border:"1px solid rgba(236,72,153,.4)", cursor:"pointer", color:"#ec4899", fontSize:12}}
+            style={{width:38, height:38, borderRadius:"50%", border:"1px solid rgba(236,72,153,.5)", cursor:"pointer", color:"#ec4899", fontSize:11, display:"flex", alignItems:"center", justifyContent:"center"}}
           >⏺</motion.button>
 
-          <Chip style={{minWidth:80}}>
+          {/* Status */}
+          <div style={{padding:"6px 14px", borderRadius:10, border:"1px solid rgba(255,255,255,.08)", background:"rgba(255,255,255,.03)", minWidth:76, textAlign:"center"}}>
             <motion.div
-              animate={{color: playing ? ["#22d3ee","#8b5cf6","#22d3ee"] : "#ffffff44"}}
+              animate={{color: playing ? ["#22d3ee","#8b5cf6","#22d3ee"] : status==="ERROR" ? "#ef4444" : "#ffffff33"}}
               transition={{duration:2, repeat:Infinity}}
-              style={{fontSize:11, letterSpacing:2, fontWeight:700}}
+              style={{fontSize:10, letterSpacing:2, fontWeight:700}}
             >{status}</motion.div>
-          </Chip>
+          </div>
         </div>
 
-        <div style={{display:"flex", gap:10}}>
-          {["SAVE","SHARE","⚙"].map(l => (
-            <button key={l} style={{
-              padding:"8px 16px", borderRadius:10,
-              border:"1px solid rgba(255,255,255,.08)",
-              background:"rgba(255,255,255,.03)", color:"rgba(255,255,255,.6)",
-              fontSize:11, cursor:"pointer", letterSpacing:1,
-            }}>{l}</button>
-          ))}
+        <div style={{display:"flex", gap:8}}>
+          {/* SAVE — connected: exports grid state as JSON */}
+          <button
+            title="Export current state as JSON"
+            onClick={() => {
+              const state = { grid, chords, macros, bassMod, synthMod, percMod, fxValues, bpm };
+              const blob = new Blob([JSON.stringify(state, null, 2)], {type:"application/json"});
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url; a.download = "phase-preset.json"; a.click();
+              URL.revokeObjectURL(url);
+            }}
+            style={{padding:"7px 14px", borderRadius:9, border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.7)", fontSize:10, cursor:"pointer", letterSpacing:1}}>SAVE</button>
+          {/* SHARE — copies BPM + chords info to clipboard */}
+          <button
+            title="Copy session info to clipboard"
+            onClick={() => {
+              const info = `PHASE | BPM: ${bpm} | Chords: ${chords.join(", ")} | Key: D MIN`;
+              navigator.clipboard?.writeText(info).catch(()=>{});
+            }}
+            style={{padding:"7px 14px", borderRadius:9, border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.7)", fontSize:10, cursor:"pointer", letterSpacing:1}}>SHARE</button>
+          {/* RESET ALL shortcut */}
+          <button
+            title="Reset all parameters"
+            onClick={resetAll}
+            style={{padding:"7px 14px", borderRadius:9, border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)", color:"rgba(255,255,255,.7)", fontSize:10, cursor:"pointer", letterSpacing:1}}>⚙</button>
         </div>
       </header>
 
-      {/* BODY */}
-      <div style={{flex:1, display:"grid", gridTemplateColumns:"280px 1fr 300px", overflow:"hidden", minHeight:0}}>
+      {/* ── BODY ── */}
+      <div style={{flex:1, display:"grid", gridTemplateColumns:"272px 1fr 292px", overflow:"hidden", minHeight:0}}>
 
-        {/* LEFT */}
+        {/* LEFT PANEL */}
         <aside style={{
           borderRight:"1px solid rgba(255,255,255,.05)",
-          padding:"18px 16px", display:"flex", flexDirection:"column", gap:10,
-          overflowY:"auto", background:"rgba(0,0,0,.25)",
+          padding:"16px 14px", display:"flex", flexDirection:"column", gap:9,
+          overflowY:"auto", background:"rgba(0,0,0,.3)",
         }}>
           <Lbl>✦ MACRO ENGINE</Lbl>
           {macros.map((m,i) => (
@@ -755,14 +688,15 @@ export default function Home() {
           </div>
 
           <HR/><Lbl>PERC DESIGNER</Lbl>
-          <div style={{display:"flex", flexWrap:"wrap", gap:5, marginBottom:6}}>
+          <div style={{display:"flex", flexWrap:"wrap", gap:4, marginBottom:4}}>
             {PERC_TYPES.map(t => (
               <button key={t} onClick={()=>setPercMod(p=>({...p,type:t}))} style={{
-                padding:"5px 8px", borderRadius:7, fontSize:9, cursor:"pointer",
+                padding:"4px 7px", borderRadius:6, fontSize:8, cursor:"pointer",
                 fontFamily:"inherit", textTransform:"uppercase", letterSpacing:1,
                 border:`1px solid ${percMod.type===t?"#8b5cf6":"rgba(255,255,255,.08)"}`,
-                background: percMod.type===t?"rgba(139,92,246,.22)":"rgba(255,255,255,.03)",
+                background: percMod.type===t?"rgba(139,92,246,.25)":"rgba(255,255,255,.03)",
                 color: percMod.type===t?"#fff":"rgba(255,255,255,.45)",
+                transition:"all .15s",
               }}>{t}</button>
             ))}
           </div>
@@ -772,7 +706,7 @@ export default function Home() {
           <button onClick={()=>setPercMod({
             tone:rand(100), snap:rand(100), space:rand(60),
             type:PERC_TYPES[rand(PERC_TYPES.length)],
-          })} style={{...sBtn("#8b5cf6"),marginTop:2}}>↻ RANDOMIZE PERC</button>
+          })} style={{...sBtn("#8b5cf6"), fontSize:8, padding:"5px 0"}}>↻ RANDOMIZE PERC</button>
 
           <HR/><Lbl>BASS MOD</Lbl>
           <Slider label="CUTOFF"   value={bassMod.cutoff}  color="#a3e635" onChange={v=>setBassMod(p=>({...p,cutoff:v}))}/>
@@ -791,117 +725,170 @@ export default function Home() {
 
           <HR/><Lbl>LIVE CODE</Lbl>
           <div style={{
-            flex:1, minHeight:80, borderRadius:14,
-            border:"1px solid rgba(34,211,238,.18)",
-            background:"rgba(34,211,238,.04)",
-            padding:12, fontSize:10, color:"#22d3ee88",
-            fontFamily:"monospace", letterSpacing:.5, lineHeight:1.8,
+            flex:1, minHeight:76, borderRadius:12,
+            border:"1px solid rgba(34,211,238,.15)",
+            background:"rgba(34,211,238,.03)",
+            padding:10, fontSize:9, color:"#22d3ee77",
+            fontFamily:"monospace", letterSpacing:.5, lineHeight:1.9,
           }}>
-            <div style={{color:"#22d3ee"}}>stack(</div>
+            <div style={{color:"#22d3ee99"}}>stack(</div>
             <div style={{paddingLeft:8}}>s(<span style={{color:"#ec4899"}}>"bd ~ ~ ~"</span>),</div>
             <div style={{paddingLeft:8}}>s(<span style={{color:"#22d3ee"}}>"~ hh ~ hh"</span>),</div>
             <div style={{paddingLeft:8}}>s(<span style={{color:"#8b5cf6"}}>"{percMod.type} ~"</span>)</div>
             <div style={{paddingLeft:12}}>.lpf(<span style={{color:"#a3e635"}}>{liveCodePercLpf}</span>),</div>
             <div style={{paddingLeft:8}}>note(<span style={{color:"#a3e635"}}>"{chords[0]}"</span>)</div>
-            <div style={{paddingLeft:12}}>.s(<span style={{color:"#8b5cf6"}}>"sawtooth"</span>)</div>
             <div style={{paddingLeft:12}}>.cutoff(<span style={{color:"#f97316"}}>{liveCodeBasscut}</span>)</div>
             <div style={{paddingLeft:12}}>.room(<span style={{color:"#38bdf8"}}>{liveCodeRoom}</span>)</div>
-            <div style={{color:"#22d3ee"}}>{")"}.bpm(<span style={{color:"#f472b6"}}>{bpm}</span>{")"}</div>
+            <div style={{color:"#22d3ee99"}}>{")"}.bpm(<span style={{color:"#f472b6"}}>{bpm}</span>{")"}</div>
             <motion.div animate={{opacity:[1,0,1]}} transition={{duration:1.2,repeat:Infinity}}
-              style={{color:"#22d3ee",marginTop:4}}>_</motion.div>
+              style={{color:"#22d3ee",marginTop:2}}>▌</motion.div>
           </div>
         </aside>
 
         {/* CENTER */}
         <div style={{display:"flex", flexDirection:"column", overflow:"hidden", minHeight:0}}>
 
-          {/* Sequencer */}
-          <div style={{flex:"0 0 auto", padding:"18px 20px 10px", position:"relative"}}>
-            <Lbl>SEQUENCER CORE</Lbl>
-            <div style={{position:"relative", padding:"0 0 10px"}}>
+          {/* ── SEQUENCER with REAL PLAYHEAD ── */}
+          <div style={{flex:"0 0 auto", padding:"16px 18px 8px", position:"relative"}}>
+            <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
+              <Lbl>SEQUENCER CORE</Lbl>
+              {/* Quick-action buttons inside sequencer header */}
+              <div style={{display:"flex", gap:6}}>
+                {[
+                  {label:"CLR", title:"Clear all steps", fn:()=>setGrid(TRACKS.map(()=>Array(16).fill(false)))},
+                  {label:"INIT", title:"Reset to initial grid", fn:()=>setGrid(makeGrid())},
+                ].map(({label,title,fn})=>(
+                  <button key={label} title={title} onClick={fn} style={{
+                    padding:"3px 9px", borderRadius:6, fontSize:8, cursor:"pointer",
+                    border:"1px solid rgba(255,255,255,.1)", background:"rgba(255,255,255,.04)",
+                    color:"rgba(255,255,255,.55)", fontFamily:"inherit", letterSpacing:1,
+                  }}>{label}</button>
+                ))}
+              </div>
+            </div>
+
+            {/* Outer glow border */}
+            <div style={{position:"relative", padding:"0 0 8px"}}>
               <motion.div
-                animate={{opacity: playing ? [.4,.9,.4] : .15}}
-                transition={{duration: playing ? 1.5 : 2.5, repeat:Infinity}}
+                animate={{opacity: playing ? [.35,.8,.35] : .1}}
+                transition={{duration: playing ? 1.4 : 3, repeat:Infinity}}
                 style={{
-                  position:"absolute", inset:-10, borderRadius:24,
-                  border:"1px solid rgba(139,92,246,.5)",
-                  boxShadow:"0 0 60px rgba(139,92,246,.12),inset 0 0 40px rgba(139,92,246,.04)",
+                  position:"absolute", inset:-8, borderRadius:20,
+                  border:"1px solid rgba(139,92,246,.45)",
+                  boxShadow:"0 0 50px rgba(139,92,246,.08),inset 0 0 30px rgba(139,92,246,.03)",
                   pointerEvents:"none",
                 }}
               />
-              {playing && (
-  <motion.div
-    animate={{
-      left: `calc(72px + ${step} * ((100% - 72px - 15 * 6px) / 16))`,
-    }}
-    transition={{ duration: 0.08, ease: "linear" }}
-    style={{
-      position: "absolute",
-      top: 18,
-      bottom: 10,
-      width: 2,
-      borderRadius: 999,
-      background: "linear-gradient(180deg,#22d3ee,transparent)",
-      boxShadow: "0 0 18px rgba(34,211,238,.8)",
-      pointerEvents: "none",
-      zIndex: 7,
-    }}
-  />
-)}
-                />
-              )}
-              <div style={{display:"grid", gridTemplateColumns:"72px repeat(16,1fr)", gap:6, position:"relative", zIndex:6}}>
-                <div/>
-                {Array.from({length:16},(_,i) => (
-                  <div key={i} style={{
-                    fontSize:8, opacity:.3, textAlign:"center", letterSpacing:.5,
-                    color:i%4===0?"#22d3ee":"white", fontWeight:i%4===0?700:400,
-                  }}>{i+1}</div>
-                ))}
-                {TRACKS.map((track,r) => (
-                  <div key={track} style={{display:"contents"}}>
-                    <div style={{display:"flex", alignItems:"center", fontSize:10, letterSpacing:2, opacity:.7, color:TRACK_COLORS[r]}}>{track}</div>
-                    {grid[r].map((on,c) => (
-                      <StepButton key={`${track}-${c}`} on={on} active={step===c} color={TRACK_COLORS[r]} onClick={() => toggle(r,c)}/>
-                    ))}
-                  </div>
-                ))}
+
+              {/* Step numbers row + grid */}
+              <div ref={gridContainerRef} style={{position:"relative"}}>
+                {/* Step number row */}
+                <div style={{display:"grid", gridTemplateColumns:"72px repeat(16,1fr)", gap:5, marginBottom:4}}>
+                  <div/>
+                  {Array.from({length:16},(_,i) => (
+                    <div key={i} style={{
+                      fontSize:7, opacity: step===i && playing ? 1 : .28,
+                      textAlign:"center", letterSpacing:.5,
+                      color: step===i && playing ? "#22d3ee" : i%4===0 ? "#22d3ee" : "white",
+                      fontWeight: i%4===0 ? 700 : 400,
+                      transition:"color .05s, opacity .05s",
+                    }}>{i+1}</div>
+                  ))}
+                </div>
+
+                {/* PLAYHEAD — real vertical line that follows `step` */}
+                {playing && (
+                  <motion.div
+                    animate={{ left: `calc(72px + ${playheadPct}% * (100% - 72px) / 100)` }}
+                    transition={{ type:"spring", stiffness:800, damping:40 }}
+                    style={{
+                      position:"absolute",
+                      // offset from left label column (72px) + step position
+                      left: `calc(72px + ${(step / 16) * 100}% * (100% - 72px) / 100 + ${(0.5 / 16) * 100}% * (100% - 72px) / 100)`,
+                      top: 0,
+                      bottom: 0,
+                      width: 2,
+                      background: "linear-gradient(180deg, rgba(34,211,238,0) 0%, #22d3ee 20%, #22d3ee 80%, rgba(34,211,238,0) 100%)",
+                      boxShadow: "0 0 10px #22d3ee, 0 0 24px rgba(34,211,238,.4)",
+                      borderRadius: 2,
+                      pointerEvents:"none",
+                      zIndex: 10,
+                    }}
+                  />
+                )}
+
+                {/* Step buttons grid */}
+                <div style={{display:"grid", gridTemplateColumns:"72px repeat(16,1fr)", gap:5, position:"relative", zIndex:6}}>
+                  {TRACKS.map((track,r) => (
+                    <div key={track} style={{display:"contents"}}>
+                      <div style={{
+                        display:"flex", alignItems:"center", gap:6, fontSize:9,
+                        letterSpacing:2, opacity:.75, color:TRACK_COLORS[r],
+                        paddingRight:4,
+                      }}>
+                        <div style={{width:6, height:6, borderRadius:"50%", background:TRACK_COLORS[r], opacity:.7, flexShrink:0}}/>
+                        {track}
+                      </div>
+                      {grid[r].map((on,c) => (
+                        <StepButton key={`${track}-${c}`} on={on} active={step===c && playing} color={TRACK_COLORS[r]} onClick={() => toggle(r,c)}/>
+                      ))}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Harmonic DNA + XY */}
-          <div style={{flex:1, display:"grid", gridTemplateColumns:"1fr 1fr", gap:16, padding:"8px 20px 16px", minHeight:0, overflow:"hidden"}}>
-            <div style={{borderRadius:20, border:"1px solid rgba(255,255,255,.07)", background:"rgba(255,255,255,.02)", padding:16, display:"flex", flexDirection:"column", overflow:"hidden"}}>
-              <Lbl>◈ HARMONIC DNA</Lbl>
-              <div style={{display:"flex", flexWrap:"wrap", gap:10, marginTop:8}}>
+          {/* ── HARMONIC DNA + XY PAD ── */}
+          <div style={{flex:1, display:"grid", gridTemplateColumns:"1fr 1fr", gap:14, padding:"6px 18px 14px", minHeight:0, overflow:"hidden"}}>
+
+            {/* Harmonic DNA */}
+            <div style={{
+              borderRadius:18, border:"1px solid rgba(255,255,255,.07)",
+              background:"rgba(255,255,255,.018)", padding:14,
+              display:"flex", flexDirection:"column", overflow:"hidden",
+            }}>
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
+                <Lbl>◈ HARMONIC DNA</Lbl>
+                {/* Chord mode toggle — shows current chord count */}
+                <span style={{fontSize:8, opacity:.35, letterSpacing:1}}>{chords.length} CHORDS</span>
+              </div>
+              <div style={{display:"flex", flexWrap:"wrap", gap:8, flex:1}}>
                 {chords.map((c,i) => (
                   <motion.button
                     key={`${c}-${i}`}
-                    whileHover={{scale:1.05, boxShadow:"0 0 24px rgba(139,92,246,.5)"}}
-                    whileTap={{scale:0.95}}
+                    whileHover={{scale:1.06, boxShadow:"0 0 22px rgba(139,92,246,.55)"}}
+                    whileTap={{scale:0.94}}
                     onClick={randomChords}
-                    animate={playing ? {boxShadow:["0 0 8px rgba(139,92,246,.2)","0 0 20px rgba(139,92,246,.5)","0 0 8px rgba(139,92,246,.2)"]} : {}}
-                    transition={{duration:2+i*0.3, repeat:Infinity}}
+                    animate={playing ? {boxShadow:["0 0 6px rgba(139,92,246,.15)","0 0 18px rgba(139,92,246,.45)","0 0 6px rgba(139,92,246,.15)"]} : {boxShadow:"0 0 0px transparent"}}
+                    transition={{duration:2+i*0.35, repeat:Infinity}}
                     style={{
-                      padding:"12px 18px", borderRadius:14,
-                      border:"1px solid rgba(139,92,246,.5)",
-                      background:"linear-gradient(135deg,rgba(139,92,246,.2),rgba(34,211,238,.08))",
-                      color:"white", cursor:"pointer", fontSize:13, fontFamily:"inherit",
-                      letterSpacing:1, minWidth:68, textAlign:"center",
+                      padding:"10px 16px", borderRadius:12,
+                      border:"1px solid rgba(139,92,246,.45)",
+                      background:"linear-gradient(135deg,rgba(139,92,246,.18),rgba(34,211,238,.06))",
+                      color:"white", cursor:"pointer", fontSize:12, fontFamily:"inherit",
+                      letterSpacing:1, minWidth:60, textAlign:"center",
                     }}
                   >{c}</motion.button>
                 ))}
               </div>
-              <div style={{marginTop:"auto", display:"flex", gap:8, paddingTop:12}}>
+              <div style={{display:"flex", gap:7, paddingTop:10}}>
                 <button onClick={randomChords} style={sBtn("#8b5cf6")}>↻ GENERATE</button>
                 <button onClick={()=>setChords(p=>[...p].reverse())} style={sBtn("#22d3ee")}>⇆ INVERT</button>
-                <button style={sBtn("#ec4899")}>✦ LOCK</button>
+                {/* LOCK: saves current chords to origGrid conceptually — here we freeze them visually */}
+                <button
+                  title="Duplicate first chord across all slots"
+                  onClick={()=>setChords(Array(5).fill(chords[0]))}
+                  style={sBtn("#ec4899")}>✦ LOCK</button>
               </div>
             </div>
 
-            {/* XY Pad — improved touch/pointer capture */}
-            <div style={{borderRadius:20, border:"1px solid rgba(255,255,255,.07)", background:"rgba(255,255,255,.02)", padding:16, display:"flex", flexDirection:"column"}}>
+            {/* XY Performance Pad */}
+            <div style={{
+              borderRadius:18, border:"1px solid rgba(255,255,255,.07)",
+              background:"rgba(255,255,255,.018)", padding:14,
+              display:"flex", flexDirection:"column",
+            }}>
               <Lbl>⊕ PERFORMANCE FIELD</Lbl>
               <div
                 ref={xyPadRef}
@@ -910,46 +897,59 @@ export default function Home() {
                 onPointerUp={handleXyUp}
                 onPointerCancel={handleXyUp}
                 style={{
-                  flex:1, borderRadius:16, position:"relative", overflow:"hidden", cursor:"crosshair",
-                  background:`radial-gradient(circle at ${xyPos.x*100}% ${xyPos.y*100}%,rgba(34,211,238,.25),transparent 40%),radial-gradient(circle at 50% 50%,rgba(139,92,246,.08),transparent 70%),rgba(0,0,0,.3)`,
-                  border:"1px solid rgba(34,211,238,.15)", marginTop:8,
+                  flex:1, borderRadius:14, position:"relative", overflow:"hidden", cursor:"crosshair",
+                  background:`radial-gradient(circle at ${xyPos.x*100}% ${xyPos.y*100}%,rgba(34,211,238,.22),transparent 38%),radial-gradient(circle at 50% 50%,rgba(139,92,246,.06),transparent 65%),rgba(0,0,0,.28)`,
+                  border:"1px solid rgba(34,211,238,.12)", marginTop:6,
                   touchAction:"none", userSelect:"none",
                 }}
               >
-                <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px)",backgroundSize:"25% 25%"}}/>
-                <div style={{position:"absolute",top:"50%",left:0,right:0,height:1,background:"rgba(255,255,255,.08)"}}/>
-                <div style={{position:"absolute",left:"50%",top:0,bottom:0,width:1,background:"rgba(255,255,255,.08)"}}/>
-                <div style={{position:"absolute",left:8,top:"50%",transform:"translateY(-50%) rotate(-90deg)",fontSize:9,opacity:.35,letterSpacing:2}}>FILTER</div>
-                <div style={{position:"absolute",bottom:6,left:"50%",transform:"translateX(-50%)",fontSize:9,opacity:.35,letterSpacing:2}}>DEPTH</div>
-                <div style={{position:"absolute",right:6,top:6,fontSize:8,opacity:.3,letterSpacing:1}}>WIDE+BRIGHT</div>
-                <div style={{position:"absolute",right:6,bottom:6,fontSize:8,opacity:.3,letterSpacing:1}}>WIDE+WET</div>
-                <div style={{position:"absolute",left:6,top:6,fontSize:8,opacity:.3,letterSpacing:1}}>NARROW+DRY</div>
-                <div style={{position:"absolute",left:6,bottom:6,fontSize:8,opacity:.3,letterSpacing:1}}>NARROW+DEEP</div>
+                <div style={{position:"absolute",inset:0,backgroundImage:"linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px)",backgroundSize:"25% 25%"}}/>
+                <div style={{position:"absolute",top:"50%",left:0,right:0,height:1,background:"rgba(255,255,255,.07)"}}/>
+                <div style={{position:"absolute",left:"50%",top:0,bottom:0,width:1,background:"rgba(255,255,255,.07)"}}/>
+                <div style={{position:"absolute",left:7,top:"50%",transform:"translateY(-50%) rotate(-90deg)",fontSize:8,opacity:.3,letterSpacing:2}}>FILTER</div>
+                <div style={{position:"absolute",bottom:5,left:"50%",transform:"translateX(-50%)",fontSize:8,opacity:.3,letterSpacing:2}}>DEPTH</div>
+                <div style={{position:"absolute",right:5,top:5,fontSize:7,opacity:.25,letterSpacing:1}}>WIDE+BRIGHT</div>
+                <div style={{position:"absolute",right:5,bottom:5,fontSize:7,opacity:.25,letterSpacing:1}}>WIDE+WET</div>
+                <div style={{position:"absolute",left:5,top:5,fontSize:7,opacity:.25,letterSpacing:1}}>NARROW+DRY</div>
+                <div style={{position:"absolute",left:5,bottom:5,fontSize:7,opacity:.25,letterSpacing:1}}>NARROW+DEEP</div>
                 <motion.div
                   animate={{
-                    left:`calc(${xyPos.x*100}% - 12px)`,
-                    top:`calc(${xyPos.y*100}% - 12px)`,
-                    boxShadow:playing?["0 0 20px #22d3ee","0 0 40px #22d3ee","0 0 20px #22d3ee"]:"0 0 20px #22d3ee88",
+                    left:`calc(${xyPos.x*100}% - 11px)`,
+                    top:`calc(${xyPos.y*100}% - 11px)`,
+                    boxShadow:playing
+                      ?["0 0 16px #22d3ee","0 0 36px #22d3ee","0 0 16px #22d3ee"]
+                      :"0 0 16px #22d3ee77",
                   }}
-                  transition={{type:"spring",stiffness:400,damping:30,boxShadow:{duration:1.5,repeat:Infinity}}}
-                  style={{position:"absolute",width:24,height:24,borderRadius:"50%",background:"linear-gradient(135deg,#22d3ee,#8b5cf6)",border:"2px solid rgba(255,255,255,.4)",pointerEvents:"none"}}
+                  transition={{type:"spring",stiffness:420,damping:32,boxShadow:{duration:1.4,repeat:Infinity}}}
+                  style={{
+                    position:"absolute",width:22,height:22,borderRadius:"50%",
+                    background:"linear-gradient(135deg,#22d3ee,#8b5cf6)",
+                    border:"2px solid rgba(255,255,255,.45)",pointerEvents:"none",
+                  }}
                 />
               </div>
             </div>
           </div>
 
-          {/* Mixer */}
-          <div style={{borderTop:"1px solid rgba(255,255,255,.05)",display:"grid",gridTemplateColumns:"80px repeat(6,1fr)",flexShrink:0}}>
-            <div style={{padding:"12px 16px",display:"flex",alignItems:"center",fontSize:10,letterSpacing:2,opacity:.5}}>☰ MIX</div>
+          {/* ── MIXER ── */}
+          <div style={{
+            borderTop:"1px solid rgba(255,255,255,.045)",
+            display:"grid", gridTemplateColumns:"72px repeat(6,1fr)", flexShrink:0,
+            background:"rgba(0,0,0,.15)",
+          }}>
+            <div style={{padding:"10px 14px", display:"flex", alignItems:"center", fontSize:9, letterSpacing:2, opacity:.4}}>
+              ☰ MIX
+            </div>
             {(["KICK","HAT","PERC","BASS","SYNTH","MASTER"] as const).map((m,i) => {
               const col = TRACK_COLORS[i] || "#8b5cf6";
               const sm  = soloMute[m];
               const vu  = vuLevels[i] || 0;
               return (
-                <div key={m} style={{padding:"10px 12px",borderLeft:"1px solid rgba(255,255,255,.04)"}}>
-                  <div style={{fontSize:9,letterSpacing:1.5,opacity:.6,marginBottom:6}}>{m}</div>
+                <div key={m} style={{padding:"8px 10px", borderLeft:"1px solid rgba(255,255,255,.04)"}}>
+                  <div style={{fontSize:8, letterSpacing:1.5, opacity:.55, marginBottom:5}}>{m}</div>
+                  {/* Fader */}
                   <div
-                    style={{height:4,borderRadius:999,background:"rgba(255,255,255,.06)",marginBottom:4,overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}
+                    style={{height:4, borderRadius:999, background:"rgba(255,255,255,.06)", marginBottom:4, overflow:"hidden", cursor:"ew-resize", touchAction:"none"}}
                     onPointerDown={e=>{
                       const el = e.currentTarget;
                       try { el.setPointerCapture(e.pointerId); } catch {}
@@ -963,15 +963,28 @@ export default function Home() {
                     }}
                   >
                     <motion.div animate={{width:`${(volumes[i]??1)*100}%`}} transition={{type:"spring",stiffness:300,damping:30}}
-                      style={{height:"100%",borderRadius:999,background:col,boxShadow:`0 0 8px ${col}`}}/>
+                      style={{height:"100%", borderRadius:999, background:col, boxShadow:`0 0 6px ${col}`}}/>
                   </div>
-                  <div style={{height:3,borderRadius:999,background:"rgba(255,255,255,.04)",marginBottom:6,overflow:"hidden"}}>
+                  {/* VU */}
+                  <div style={{height:3, borderRadius:999, background:"rgba(255,255,255,.04)", marginBottom:5, overflow:"hidden"}}>
                     <motion.div animate={{width:`${vu*100}%`}} transition={{duration:.07}}
-                      style={{height:"100%",borderRadius:999,background:vu>0.8?"#ef4444":vu>0.6?"#f97316":"#22d3ee",boxShadow:`0 0 6px ${vu>0.8?"#ef4444":"#22d3ee"}`}}/>
+                      style={{height:"100%", borderRadius:999,
+                        background:vu>0.8?"#ef4444":vu>0.6?"#f97316":"#22d3ee",
+                        boxShadow:`0 0 5px ${vu>0.8?"#ef4444":"#22d3ee"}`}}/>
                   </div>
-                  <div style={{display:"flex",gap:4}}>
-                    <button onClick={()=>setSoloMute(p=>({...p,[m]:p[m]==="solo"?null:"solo"}))} style={{fontSize:8,padding:"2px 5px",borderRadius:4,cursor:"pointer",letterSpacing:1,border:"1px solid rgba(255,215,0,.3)",fontFamily:"inherit",background:sm==="solo"?"rgba(255,215,0,.3)":"transparent",color:sm==="solo"?"#ffd700":"rgba(255,255,255,.35)"}}>S</button>
-                    <button onClick={()=>setSoloMute(p=>({...p,[m]:p[m]==="mute"?null:"mute"}))} style={{fontSize:8,padding:"2px 5px",borderRadius:4,cursor:"pointer",letterSpacing:1,border:"1px solid rgba(255,100,100,.3)",fontFamily:"inherit",background:sm==="mute"?"rgba(255,100,100,.3)":"transparent",color:sm==="mute"?"#ff6464":"rgba(255,255,255,.35)"}}>M</button>
+                  <div style={{display:"flex", gap:3}}>
+                    <button onClick={()=>setSoloMute(p=>({...p,[m]:p[m]==="solo"?null:"solo"}))} style={{
+                      fontSize:7, padding:"2px 5px", borderRadius:4, cursor:"pointer", letterSpacing:1,
+                      border:"1px solid rgba(255,215,0,.3)", fontFamily:"inherit",
+                      background:sm==="solo"?"rgba(255,215,0,.3)":"transparent",
+                      color:sm==="solo"?"#ffd700":"rgba(255,255,255,.32)",
+                    }}>S</button>
+                    <button onClick={()=>setSoloMute(p=>({...p,[m]:p[m]==="mute"?null:"mute"}))} style={{
+                      fontSize:7, padding:"2px 5px", borderRadius:4, cursor:"pointer", letterSpacing:1,
+                      border:"1px solid rgba(255,100,100,.3)", fontFamily:"inherit",
+                      background:sm==="mute"?"rgba(255,100,100,.3)":"transparent",
+                      color:sm==="mute"?"#ff6464":"rgba(255,255,255,.32)",
+                    }}>M</button>
                   </div>
                 </div>
               );
@@ -979,46 +992,79 @@ export default function Home() {
           </div>
         </div>
 
-        {/* RIGHT */}
-        <aside style={{borderLeft:"1px solid rgba(255,255,255,.05)",padding:"18px 16px",display:"flex",flexDirection:"column",gap:12,overflowY:"auto",background:"rgba(0,0,0,.25)"}}>
+        {/* RIGHT PANEL */}
+        <aside style={{
+          borderLeft:"1px solid rgba(255,255,255,.05)",
+          padding:"16px 14px", display:"flex", flexDirection:"column", gap:10,
+          overflowY:"auto", background:"rgba(0,0,0,.3)",
+        }}>
           <Lbl>⚡ PERFORMANCE</Lbl>
           {[
-            {label:"EVOLVE",     sub:"gradual mutation",        icon:"◎",color:"#22d3ee",fn:evolve},
-            {label:"MUTATE",     sub:"groove template rewrite", icon:"⟳",color:"#8b5cf6",fn:mutate},
-            {label:"BREAKDOWN",  sub:"strip to skeleton",       icon:"↓",color:"#ec4899",fn:breakdown},
-            {label:"GLITCH",     sub:"ratchet stutter burst",   icon:"⚡",color:"#a3e635",fn:glitch},
-            {label:"RNDM CHORDS",sub:"harmonic shift",          icon:"♬",color:"#f472b6",fn:randomChords},
-            {label:"RESET",      sub:"return to origin",        icon:"↺",color:"#64748b",fn:resetAll},
+            {label:"EVOLVE",     sub:"gradual mutation",        icon:"◎", color:"#22d3ee", fn:evolve},
+            {label:"MUTATE",     sub:"groove template rewrite", icon:"⟳", color:"#8b5cf6", fn:mutate},
+            {label:"BREAKDOWN",  sub:"strip to skeleton",       icon:"↓", color:"#ec4899", fn:breakdown},
+            {label:"GLITCH",     sub:"ratchet stutter burst",   icon:"⚡", color:"#a3e635", fn:glitch},
+            {label:"RNDM CHORDS",sub:"harmonic shift",          icon:"♬", color:"#f472b6", fn:randomChords},
+            {label:"RESET",      sub:"restore all parameters",  icon:"↺", color:"#64748b", fn:resetAll},
           ].map(({label,sub,icon,color,fn})=>(
             <motion.button key={label} onClick={fn}
-              whileHover={{scale:1.02,boxShadow:`0 0 30px ${color}33`}} whileTap={{scale:0.97}}
-              animate={label==="GLITCH"&&glitching?{boxShadow:[`0 0 0px ${color}`,`0 0 30px ${color}`,`0 0 0px ${color}`]}:{}}
-              transition={label==="GLITCH"&&glitching?{duration:.2,repeat:Infinity}:{}}
-              style={{width:"100%",padding:"14px 16px",borderRadius:16,cursor:"pointer",border:`1px solid ${color}33`,background:`linear-gradient(135deg,${color}14,rgba(0,0,0,.3))`,color:"white",textAlign:"left",fontFamily:"inherit",overflow:"hidden"}}
+              whileHover={{scale:1.02, boxShadow:`0 0 28px ${color}2e`, borderColor:`${color}66`}}
+              whileTap={{scale:0.97}}
+              animate={label==="GLITCH"&&glitching
+                ?{boxShadow:[`0 0 0px ${color}`,`0 0 28px ${color}`,`0 0 0px ${color}`]}
+                :{}}
+              transition={label==="GLITCH"&&glitching?{duration:.18,repeat:Infinity}:{}}
+              style={{
+                width:"100%", padding:"12px 14px", borderRadius:14, cursor:"pointer",
+                border:`1px solid ${color}2a`,
+                background:`linear-gradient(135deg,${color}10,rgba(0,0,0,.3))`,
+                color:"white", textAlign:"left", fontFamily:"inherit", overflow:"hidden",
+                transition:"border-color .15s",
+              }}
             >
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <span style={{fontSize:18,color}}>{icon}</span>
+              <div style={{display:"flex", alignItems:"center", gap:10}}>
+                <span style={{fontSize:16, color, width:20, textAlign:"center"}}>{icon}</span>
                 <div>
-                  <div style={{fontSize:11,fontWeight:700,letterSpacing:2}}>{label}</div>
-                  <div style={{fontSize:9,opacity:.45,letterSpacing:1,marginTop:2}}>{sub}</div>
+                  <div style={{fontSize:10, fontWeight:700, letterSpacing:2}}>{label}</div>
+                  <div style={{fontSize:8, opacity:.4, letterSpacing:1, marginTop:1}}>{sub}</div>
                 </div>
               </div>
             </motion.button>
           ))}
 
+          {/* Separator */}
+          <HR/>
+
+          {/* BPM Tap tempo */}
+          <div>
+            <Lbl>TAP TEMPO</Lbl>
+            <TapTempo onBpm={setBpm}/>
+          </div>
+
+          <HR/>
+
+          {/* Error display */}
           {error && (
-            <div style={{borderRadius:12,border:"1px solid rgba(239,68,68,.3)",background:"rgba(239,68,68,.08)",padding:12,marginTop:4}}>
-              <div style={{fontSize:9,color:"#fca5a5",letterSpacing:1}}>ERROR</div>
-              <pre style={{color:"#fecaca",whiteSpace:"pre-wrap",fontSize:10,marginTop:4}}>{error}</pre>
+            <div style={{borderRadius:10,border:"1px solid rgba(239,68,68,.3)",background:"rgba(239,68,68,.07)",padding:10}}>
+              <div style={{fontSize:8,color:"#fca5a5",letterSpacing:1,marginBottom:3}}>ERROR</div>
+              <pre style={{color:"#fecaca",whiteSpace:"pre-wrap",fontSize:9,margin:0}}>{error}</pre>
+              <button onClick={()=>setError("")} style={{marginTop:6,fontSize:8,padding:"2px 8px",borderRadius:5,border:"1px solid rgba(239,68,68,.3)",background:"transparent",color:"#fca5a5",cursor:"pointer",fontFamily:"inherit"}}>✕ DISMISS</button>
             </div>
           )}
 
-          <div style={{marginTop:"auto",borderRadius:14,border:"1px solid rgba(255,255,255,.06)",padding:12,background:"rgba(0,0,0,.2)"}}>
+          {/* Waveform */}
+          <div style={{marginTop:"auto",borderRadius:12,border:"1px solid rgba(255,255,255,.055)",padding:10,background:"rgba(0,0,0,.2)"}}>
             <Lbl>WAVEFORM</Lbl>
-            <div style={{display:"flex",alignItems:"center",gap:2,height:36}}>
+            <div style={{display:"flex", alignItems:"flex-end", gap:2, height:32}}>
               {waveAmps.map((amp,i)=>(
-                <motion.div key={i} animate={{scaleY:amp}} transition={{duration:.07}}
-                  style={{flex:1,height:"100%",borderRadius:2,background:"linear-gradient(180deg,#8b5cf6,#22d3ee)",transformOrigin:"50% 100%",opacity:.7}}/>
+                <motion.div key={i}
+                  animate={{scaleY:amp}}
+                  transition={{duration:.07}}
+                  style={{
+                    flex:1, height:"100%", borderRadius:2,
+                    background:`linear-gradient(180deg,${TRACK_COLORS[i%5]},#22d3ee)`,
+                    transformOrigin:"100% 100%", opacity:.65,
+                  }}/>
               ))}
             </div>
           </div>
@@ -1028,27 +1074,64 @@ export default function Home() {
   );
 }
 
+// ─── TapTempo component ───────────────────────────────────────────────────────
+function TapTempo({ onBpm }: { onBpm: (bpm: number) => void }) {
+  const tapsRef = useRef<number[]>([]);
+  const tap = useCallback(() => {
+    const now = Date.now();
+    tapsRef.current = [...tapsRef.current.filter(t => now - t < 3000), now];
+    if (tapsRef.current.length >= 2) {
+      const intervals = tapsRef.current.slice(1).map((t,i) => t - tapsRef.current[i]);
+      const avg = intervals.reduce((a,b)=>a+b,0) / intervals.length;
+      const bpm = Math.round(60000 / avg);
+      onBpm(Math.max(60, Math.min(200, bpm)));
+    }
+  }, [onBpm]);
+  return (
+    <motion.button
+      onClick={tap}
+      whileTap={{scale:0.93, background:"rgba(34,211,238,.25)"}}
+      style={{
+        width:"100%", padding:"10px 0", borderRadius:10, cursor:"pointer",
+        border:"1px solid rgba(34,211,238,.25)", background:"rgba(34,211,238,.06)",
+        color:"#22d3ee", fontSize:10, letterSpacing:2, fontFamily:"inherit",
+        fontWeight:600,
+      }}
+    >TAP ▶</motion.button>
+  );
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Lbl({children}:{children:React.ReactNode}) {
-  return <div style={{fontSize:9,letterSpacing:3,opacity:.5,marginBottom:4,textTransform:"uppercase"}}>{children}</div>;
+  return <div style={{fontSize:8,letterSpacing:3,opacity:.45,marginBottom:3,textTransform:"uppercase"}}>{children}</div>;
 }
 function HR() {
-  return <div style={{height:1,background:"rgba(255,255,255,.05)",margin:"2px 0"}}/>;
-}
-function Chip({children,style}:{children:React.ReactNode;style?:React.CSSProperties}) {
-  return (
-    <div style={{padding:"8px 14px",borderRadius:12,border:"1px solid rgba(255,255,255,.08)",background:"rgba(255,255,255,.03)",textAlign:"center",...style}}>{children}</div>
-  );
+  return <div style={{height:1,background:"rgba(255,255,255,.05)",margin:"1px 0"}}/>;
 }
 
 const StepButton = memo(function StepButton({on,active,color,onClick}:{on:boolean;active:boolean;color:string;onClick:()=>void}) {
   return (
-    <motion.button onClick={onClick}
-      animate={{scale:active?1.18:1,opacity:on?1:0.2,boxShadow:active?`0 0 20px ${color}cc`:on?`0 0 10px ${color}55`:"none"}}
-      transition={{type:"spring",stiffness:600,damping:25}}
-      whileHover={{scale:1.1,opacity:0.8}} whileTap={{scale:0.9}}
-      style={{height:28,borderRadius:6,border:on?`1px solid ${color}88`:"1px solid rgba(255,255,255,.07)",background:on?`linear-gradient(135deg,${color}cc,${color}44)`:active?"rgba(255,255,255,.08)":"rgba(255,255,255,.03)",cursor:"pointer"}}
+    <motion.button
+      onClick={onClick}
+      animate={{
+        scale: active ? 1.12 : 1,
+        opacity: on ? 1 : 0.18,
+        boxShadow: active
+          ? `0 0 14px ${color}bb, 0 0 28px ${color}44`
+          : on ? `0 0 8px ${color}44` : "none",
+      }}
+      transition={{type:"spring", stiffness:700, damping:28}}
+      whileHover={{scale:1.08, opacity:0.85}}
+      whileTap={{scale:0.92}}
+      style={{
+        height:26, borderRadius:5,
+        border: on ? `1px solid ${color}77` : "1px solid rgba(255,255,255,.06)",
+        background: on
+          ? `linear-gradient(135deg,${color}bb,${color}44)`
+          : active ? "rgba(255,255,255,.07)" : "rgba(255,255,255,.025)",
+        cursor:"pointer",
+      }}
     />
   );
 });
@@ -1061,17 +1144,17 @@ function MacroBar({label,value,color,onChange}:{label:string;value:number;color:
     onChange(Math.round(clamp((e.clientX-r.left)/r.width)*100));
   }
   return (
-    <div style={{marginBottom:4}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:9,letterSpacing:1.5}}>
-        <span style={{opacity:.7}}>{label}</span>
-        <span style={{color,opacity:.9}}>{value}%</span>
+    <div style={{marginBottom:2}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:8,letterSpacing:1.5}}>
+        <span style={{opacity:.65}}>{label}</span>
+        <span style={{color,opacity:.85, fontVariantNumeric:"tabular-nums"}}>{value}%</span>
       </div>
       <div ref={ref} onClick={upd}
         onPointerDown={e=>{try{(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);}catch{}upd(e);}}
         onPointerMove={e=>{if(e.buttons&1)upd(e);}}
-        style={{height:6,borderRadius:999,background:"rgba(255,255,255,.06)",overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}>
+        style={{height:6,borderRadius:999,background:"rgba(255,255,255,.055)",overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}>
         <motion.div animate={{width:`${value}%`}} transition={{type:"spring",stiffness:300,damping:30}}
-          style={{height:"100%",borderRadius:999,background:`linear-gradient(90deg,${color}88,${color})`,boxShadow:`0 0 10px ${color}88`}}/>
+          style={{height:"100%",borderRadius:999,background:`linear-gradient(90deg,${color}77,${color})`,boxShadow:`0 0 8px ${color}77`}}/>
       </div>
     </div>
   );
@@ -1085,17 +1168,17 @@ function Slider({label,value,color,onChange}:{label:string;value:number;color:st
     onChange(Math.round(clamp((e.clientX-r.left)/r.width)*100));
   }
   return (
-    <div style={{marginBottom:6}}>
-      <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,fontSize:8,letterSpacing:1.4}}>
-        <span style={{opacity:.55}}>{label}</span>
-        <span style={{color,opacity:.9}}>{value}</span>
+    <div style={{marginBottom:5}}>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,fontSize:7.5,letterSpacing:1.4}}>
+        <span style={{opacity:.5}}>{label}</span>
+        <span style={{color,opacity:.85, fontVariantNumeric:"tabular-nums"}}>{value}</span>
       </div>
       <div ref={ref} onClick={upd}
         onPointerDown={e=>{try{(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);}catch{}upd(e);}}
         onPointerMove={e=>{if(e.buttons&1)upd(e);}}
-        style={{height:5,borderRadius:999,background:"rgba(255,255,255,.06)",overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}>
+        style={{height:4,borderRadius:999,background:"rgba(255,255,255,.055)",overflow:"hidden",cursor:"ew-resize",touchAction:"none"}}>
         <motion.div animate={{width:`${value}%`}} transition={{type:"spring",stiffness:320,damping:28}}
-          style={{height:"100%",borderRadius:999,background:color,boxShadow:`0 0 8px ${color}`}}/>
+          style={{height:"100%",borderRadius:999,background:color,boxShadow:`0 0 6px ${color}`}}/>
       </div>
     </div>
   );
@@ -1105,18 +1188,31 @@ function FxKnob({label,value,color,onChange}:{label:string;value:number;color:st
   const deg = -135 + (value/100)*270;
   return (
     <div style={{textAlign:"center",flex:1}}>
-      <div onClick={()=>onChange(Math.round((value+10)%110))} style={{width:56,height:56,margin:"0 auto 6px",borderRadius:"50%",border:`2px solid ${color}55`,background:`conic-gradient(${color}66 0deg,${color}66 ${deg+135}deg,rgba(255,255,255,.05) ${deg+135}deg)`,display:"grid",placeItems:"center",cursor:"pointer",boxShadow:`0 0 16px ${color}33`,position:"relative"}}>
-        <div style={{fontSize:10,fontWeight:700,color}}>{value}</div>
-        <div style={{position:"absolute",width:3,height:16,background:color,borderRadius:2,top:4,transform:`rotate(${deg}deg)`,transformOrigin:"50% 100%"}}/>
+      <div
+        onClick={()=>onChange(Math.round((value+10)%110))}
+        style={{
+          width:52, height:52, margin:"0 auto 5px", borderRadius:"50%",
+          border:`2px solid ${color}44`,
+          background:`conic-gradient(${color}55 0deg,${color}55 ${deg+135}deg,rgba(255,255,255,.04) ${deg+135}deg)`,
+          display:"grid", placeItems:"center", cursor:"pointer",
+          boxShadow:`0 0 14px ${color}22`, position:"relative",
+        }}
+      >
+        <div style={{fontSize:9,fontWeight:700,color}}>{value}</div>
+        <div style={{
+          position:"absolute", width:2, height:13, background:color,
+          borderRadius:2, top:5,
+          transform:`rotate(${deg}deg)`, transformOrigin:"50% 100%",
+        }}/>
       </div>
-      <div style={{fontSize:9,opacity:.5,letterSpacing:1.5}}>{label}</div>
+      <div style={{fontSize:8,opacity:.45,letterSpacing:1.5}}>{label}</div>
     </div>
   );
 }
 
 function microBtn():React.CSSProperties {
-  return {width:22,height:14,borderRadius:4,border:"1px solid rgba(255,255,255,.1)",background:"rgba(255,255,255,.03)",color:"rgba(255,255,255,.5)",fontSize:8,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"};
+  return {width:20,height:13,borderRadius:4,border:"1px solid rgba(255,255,255,.1)",background:"rgba(255,255,255,.03)",color:"rgba(255,255,255,.5)",fontSize:7,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"inherit"};
 }
 function sBtn(color:string):React.CSSProperties {
-  return {flex:1,padding:"6px 0",borderRadius:8,cursor:"pointer",border:`1px solid ${color}44`,background:`${color}11`,color:"rgba(255,255,255,.6)",fontSize:9,letterSpacing:1,fontFamily:"inherit"};
+  return {flex:1,padding:"5px 0",borderRadius:7,cursor:"pointer",border:`1px solid ${color}33`,background:`${color}0e`,color:"rgba(255,255,255,.55)",fontSize:8,letterSpacing:1,fontFamily:"inherit"};
 }
